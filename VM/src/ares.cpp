@@ -1281,6 +1281,22 @@ static void p_userdata(Info *info) {                               /* ... udata 
         lua_pop(info->L, 1);                                     /* ... udata */
         break;
     }
+    case UTAG_DETECTED_EVENT:
+    {
+        const auto *detected_event = (lua_DetectedEvent*)value;
+        WRITE_VALUE(detected_event->index, int32_t);
+        WRITE_VALUE(detected_event->valid, uint8_t);
+        WRITE_VALUE(detected_event->can_change_damage, uint8_t);
+        break;
+    }
+    case UTAG_LLEVENTS:
+    {
+        const auto *llevents = (lua_LLEvents*)value;
+        lua_getref(info->L, llevents->listeners_tab);   /* ... udata handlers */
+        persist(info);
+        lua_pop(info->L, 1);                                     /* ... udata */
+        break;
+    }
     default:
       eris_error(info, "Unknown userdata type %d", utag);
       break;
@@ -1324,8 +1340,49 @@ static void u_userdata(Info *info) {                                   /* ... */
         lua_rawseti(info->L, REFTIDX, reference);     /* perms reftbl ... obj */
         break;
       }
+      case UTAG_DETECTED_EVENT:
+      {
+          auto *detected_event = (lua_DetectedEvent*)lua_newuserdatataggedwithmetatable(
+              info->L,
+              sizeof(lua_DetectedEvent),
+              UTAG_DETECTED_EVENT
+          );
+                                                                 /* ... udata */
+          memset(detected_event, 0, sizeof(lua_DetectedEvent));
+          detected_event->index = READ_VALUE(int32_t);
+          detected_event->valid = (bool)READ_VALUE(uint8_t);
+          detected_event->can_change_damage = (bool)READ_VALUE(uint8_t);
+          registerobject(info);
+          break;
+      }
+      case UTAG_LLEVENTS:
+      {
+          // Because we have an inner, wrapped table reference we need to reserve
+          // the idx for the outer event handler first, since we saw it first.
+          int reference = allocate_ref_idx(info);
+
+          unpersist(info);                                /* ... handlers_tab */
+          eris_assert(lua_type(info->L, -1) == LUA_TTABLE);
+          // We need to add a ref to the table so it stays alive as long as LLEvents
+          int tab_ref = lua_ref(info->L, -1);
+          lua_pop(info->L, 1);                                         /* ... */
+
+          auto *llevents = (lua_LLEvents*)lua_newuserdatataggedwithmetatable(
+              info->L,
+              sizeof(lua_LLEvents),
+              UTAG_LLEVENTS
+          );
+                                                              /* ... llevents */
+          memset(llevents, 0, sizeof(lua_LLEvents));
+          llevents->listeners_tab = tab_ref;
+
+          // Manually put the LLEvents in the references table at the correct reference index
+          lua_pushvalue(info->L, -1);             /* perms reftbl ... obj obj */
+          lua_rawseti(info->L, REFTIDX, reference);   /* perms reftbl ... obj */
+          break;
+      }
       default:
-        eris_assert(0);
+        eris_assert(!"Unknown userdata tag");
         break;
     }
   }
@@ -2719,7 +2776,7 @@ static void scavenge_global_cfuncs_internal(lua_State *L, bool forUnpersist, con
                     eris_assert(lua_type(L, -1) == LUA_TSTRING);
                     eris_assert(lua_type(L, -2) == LUA_TFUNCTION);
                 }
-                lua_rawset(L, perms_idx);             /* ... perms glob_tab k v */
+                lua_rawset(L, perms_idx);           /* ... perms glob_tab k v */
             }
         }
         else if (mod_name == nullptr && val_type == LUA_TTABLE) {
@@ -2739,12 +2796,12 @@ static void scavenge_global_cfuncs(lua_State *L, bool forUnpersist) {
     // Push the real, underlying globals table onto the stack
     TValue gt_tv;
     sethvalue(L, &gt_tv, eris_getglobalsbase(L));
-    luaA_pushobject(L, &gt_tv);                           /* ... perms glob_tab */
+    luaA_pushobject(L, &gt_tv);                         /* ... perms glob_tab */
 
     scavenge_global_cfuncs_internal(L, forUnpersist, nullptr);
 
-                                                          /* ... perms glob_tab */
-    lua_pop(L, 1);                                                 /* ... perms */
+                                                        /* ... perms glob_tab */
+    lua_pop(L, 1);                                               /* ... perms */
 
     eris_assert(top == lua_gettop(L));
 }
