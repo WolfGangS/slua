@@ -43,11 +43,13 @@ typedef struct lua_DetectedEvent {
     bool can_change_damage;
 } lua_DetectedEvent;
 
+struct LuaTable;
 typedef struct lua_LLEvents {
     // to be used with lua_ref(), be sure to un-pin appropriately on destruction.
     // should be a reference to a table of `event_name_str -> {table of handler closures}`
-    int listeners_tab;
-
+    int listeners_tab_ref;
+    // Having an actual pointer is valuable for quick traversal.
+    LuaTable * listeners_tab;
 } lua_LLEvents;
 
 LUA_API int luaSL_pushuuidlstring(lua_State *L, const char *str, size_t len);

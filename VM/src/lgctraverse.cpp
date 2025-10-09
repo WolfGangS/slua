@@ -109,9 +109,18 @@ static void traverseudata(ReachableContext* ctx, Udata* u)
     if (u->metatable)
         enqueueobj(ctx, obj2gco(u->metatable));
 
-    // Traverse UUID string reference if applicable
-    if (u->tag == UTAG_UUID)
-        enqueueobj(ctx, obj2gco(((lua_LSLUUID*)&u->data)->str));
+    // Traverse any internal references udatas might have, if applicable.
+    switch(u->tag)
+    {
+        case UTAG_LLEVENTS:
+            enqueueobj(ctx, obj2gco(((lua_LLEvents*)&u->data)->listeners_tab));
+            break;
+        case UTAG_UUID:
+            enqueueobj(ctx, obj2gco(((lua_LSLUUID*)&u->data)->str));
+            break;
+        default:
+            break;
+    }
 }
 
 static void traversethread(ReachableContext* ctx, lua_State* th)
@@ -316,8 +325,23 @@ static size_t calcgcosize(GCObject *obj)
         return BASE_CLOSURE_COST + (cl->nupvalues * TVALUE_COST);
     }
     case LUA_TUSERDATA:
+    {
+        const Udata *udata = gco2u(obj);
         // TODO: specific sizes for each kind of userdata!
-        return sizeudata(gco2u(obj)->len);
+        switch (udata->tag)
+        {
+        case UTAG_UUID:
+            return 4;
+        case UTAG_QUATERNION:
+            return 4 * 4;
+        case UTAG_DETECTED_EVENT:
+            return 6;
+        case UTAG_LLEVENTS:
+            return 8;
+        default:
+            return sizeudata(udata->len);
+        }
+    }
     case LUA_TTHREAD:
     {
         lua_State* th = gco2th(obj);

@@ -1292,7 +1292,8 @@ static void p_userdata(Info *info) {                               /* ... udata 
     case UTAG_LLEVENTS:
     {
         const auto *llevents = (lua_LLEvents*)value;
-        lua_getref(info->L, llevents->listeners_tab);   /* ... udata handlers */
+        lua_getref(info->L, llevents->listeners_tab_ref);
+                                                        /* ... udata handlers */
         persist(info);
         lua_pop(info->L, 1);                                     /* ... udata */
         break;
@@ -1365,6 +1366,7 @@ static void u_userdata(Info *info) {                                   /* ... */
           eris_assert(lua_type(info->L, -1) == LUA_TTABLE);
           // We need to add a ref to the table so it stays alive as long as LLEvents
           int tab_ref = lua_ref(info->L, -1);
+          LuaTable *listeners_tab = hvalue(luaA_toobject(info->L, -1));
           lua_pop(info->L, 1);                                         /* ... */
 
           auto *llevents = (lua_LLEvents*)lua_newuserdatataggedwithmetatable(
@@ -1373,8 +1375,8 @@ static void u_userdata(Info *info) {                                   /* ... */
               UTAG_LLEVENTS
           );
                                                               /* ... llevents */
-          memset(llevents, 0, sizeof(lua_LLEvents));
-          llevents->listeners_tab = tab_ref;
+          llevents->listeners_tab_ref = tab_ref;
+          llevents->listeners_tab = listeners_tab;
 
           // Manually put the LLEvents in the references table at the correct reference index
           lua_pushvalue(info->L, -1);             /* perms reftbl ... obj obj */

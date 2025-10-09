@@ -1382,10 +1382,10 @@ static int lsl_detected_event_tostring(lua_State *L)
 static void lsl_llevents_dtor(lua_State *L, void *data)
 {
     lua_LLEvents *llevents = (lua_LLEvents *)data;
-    if (llevents->listeners_tab != -1)
+    if (llevents->listeners_tab_ref != -1)
     {
-        lua_unref(L, llevents->listeners_tab);
-        llevents->listeners_tab = -1;
+        lua_unref(L, llevents->listeners_tab_ref);
+        llevents->listeners_tab_ref = -1;
     }
 }
 
@@ -1395,7 +1395,7 @@ int luaSL_createeventmanager(lua_State *L)
 
     // Create empty listeners table
     lua_createtable(L, 0, 0);
-    llevents->listeners_tab = lua_ref(L, -1);
+    llevents->listeners_tab_ref = lua_ref(L, -1);
     // event name -> {event handler functions}
     lua_pop(L, 1);
 
@@ -1447,7 +1447,7 @@ static int lsl_llevents_on(lua_State *L)
     luaL_checktype(L, 3, LUA_TFUNCTION);
 
     // Get the listeners table
-    lua_getref(L, llevents->listeners_tab);
+    lua_getref(L, llevents->listeners_tab_ref);
 
     // Get or create the handlers array for this event
     lua_rawgetfield(L, -1, event_name);
@@ -1489,7 +1489,7 @@ static int lsl_llevents_off(lua_State *L)
     luaL_checktype(L, 3, LUA_TFUNCTION);
 
     // Get the listeners table
-    lua_getref(L, llevents->listeners_tab);
+    lua_getref(L, llevents->listeners_tab_ref);
     lua_rawgetfield(L, -1, event_name);
 
     if (lua_isnil(L, -1))
@@ -1622,7 +1622,7 @@ static int lsl_llevents_listeners(lua_State *L)
     const char *event_name = luaL_checkstring(L, 2);
 
     // Get the listeners table
-    lua_getref(L, llevents->listeners_tab);
+    lua_getref(L, llevents->listeners_tab_ref);
     lua_rawgetfield(L, -1, event_name);
 
     if (lua_isnil(L, -1))
@@ -1643,7 +1643,7 @@ static int lsl_llevents_eventnames(lua_State *L)
         luaL_typeerror(L, 1, "LLEvents");
 
     // Get the listeners table
-    lua_getref(L, llevents->listeners_tab);
+    lua_getref(L, llevents->listeners_tab_ref);
 
     lua_createtable(L, 0, 0);
     int index = 1;
@@ -1765,7 +1765,7 @@ static int lsl_llevents_handle_event_init(lua_State *L)
     // I can't remember how much this needs temporarily, this should be fine.
     lua_checkstack(L, nargs + 10);
 
-    lua_getref(L, llevents->listeners_tab);
+    lua_getref(L, llevents->listeners_tab_ref);
     lua_rawgetfield(L, -1, event_name);
 
     // We have no listeners for this event.
