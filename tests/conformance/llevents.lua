@@ -83,14 +83,18 @@ LLEvents:off("touch_start", LLEvents:listeners("touch_start")[1])
 
 -- Once handler with handleEvent
 local once_call_count = 0
-local once_test_handler = LLEvents:once("listen", function()
+local once_args = nil
+local once_test_handler = LLEvents:once("listen", function(...)
     once_call_count = once_call_count + 1
+    once_args = table.pack(...)
 end)
 
 assert(#LLEvents:listeners("listen") == 1)
 LLEvents:handleEvent("listen", 0, "test", "key", "msg")
 assert(once_call_count == 1)
 assert(#LLEvents:listeners("listen") == 0)
+assert(#once_args == 4)
+assert(once_args[4] == "msg")
 
 -- Call again, should not increment
 LLEvents:handleEvent("listen", 0, "test", "key", "msg")

@@ -1569,7 +1569,8 @@ static int lsl_llevents_once_wrapper(lua_State *L)
     lua_call(L, 3, 0);
 
     // Get rid of things we don't need on the stack, because we're about to call the real event handler.
-    lua_pop(L, 2);
+    lua_pop(L, 1);
+
     // Put the actual handler before the args that are still on the stack
     lua_pushvalue(L, lua_upvalueindex(ONCE_HANDLER));
     lua_insert(L, 1);
