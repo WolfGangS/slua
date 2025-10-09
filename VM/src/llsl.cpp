@@ -1396,6 +1396,7 @@ int luaSL_createeventmanager(lua_State *L)
     // Create empty listeners table
     lua_createtable(L, 0, 0);
     llevents->listeners_tab_ref = lua_ref(L, -1);
+    llevents->listeners_tab = hvalue(luaA_toobject(L, -1));
     // event name -> {event handler functions}
     lua_pop(L, 1);
 
