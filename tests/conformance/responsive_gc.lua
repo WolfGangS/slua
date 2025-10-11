@@ -1,4 +1,4 @@
-change_memcat()
+change_memcat(2)
 local t = {}
 
 function do_some_allocs(num, callback)

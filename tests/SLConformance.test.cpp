@@ -43,6 +43,12 @@ typedef struct SLTestRuntimeState : lua_SLRuntimeState
     int yield_num = 0;
     int break_num = 0;
     int skip_next_break = 0;
+
+    // Memory limiting state for reachability-based accounting
+    lua_OpaqueGCObjectSet free_objects;
+    size_t max_mem = 0;
+    size_t actual_size = 0;
+    size_t approximate_size = 0;
 } RuntimeState;
 
 
@@ -142,6 +148,36 @@ static int lua_collectgarbage(lua_State* L)
     }
 }
 
+// Helper callback that enforces reachability-based memory limits
+// Reads max_mem and free_objects from the RuntimeState
+static int memoryLimitCallback(lua_State *L, size_t osize, size_t nsize)
+{
+    L = lua_mainthread(L);
+    RuntimeState* state = (RuntimeState*)L->userdata;
+
+    // This is a net shrink in memory, not relevant for our limiting logic. We can't assume that
+    // memory being freed has anything to do with us, given that the GC can work on things unrelated
+    // to the currently executing task.
+    if (osize >= nsize)
+        return 0;
+
+    size_t net_gain = nsize - osize;
+
+    // Figure out the actual current size of the heap if we didn't already have it,
+    // or the alloc would push us over the limit given the current approximate size.
+    if (state->actual_size == 0 || (state->approximate_size + net_gain > state->max_mem))
+    {
+        state->approximate_size = state->actual_size = lua_userthreadsize(L, &state->free_objects);
+
+        if (state->actual_size + net_gain > state->max_mem)
+            return 1;
+    }
+
+    state->approximate_size += net_gain;
+
+    return 0;
+}
+
 static StateRef runConformance(const char* name, int32_t (*yield)(lua_State* L) = nullptr, void (*setup)(lua_State* L) = nullptr,
     lua_State* initialLuaState = nullptr, lua_CompileOptions* options = nullptr)
 {
@@ -224,7 +260,7 @@ static StateRef runConformance(const char* name, int32_t (*yield)(lua_State* L) 
     compileOrThrow(bcb, source);
     std::string bytecode = bcb.getBytecode();
 
-    lua_setmemcat(L, 0);
+    lua_setmemcat(L, 2);
     int result = luau_load(L, chunkname.c_str(), bytecode.c_str(), bytecode.length(), 0);
     if (result)
     {
@@ -233,6 +269,7 @@ static StateRef runConformance(const char* name, int32_t (*yield)(lua_State* L) 
     }
 
     lua_fixallcollectable(L);
+    runtime_state->free_objects = lua_collectfreeobjects(L);
 
     // Make sure all of our globals were fixable. If that's the case,
     // _G itself should be marked fixed as well.
@@ -556,60 +593,26 @@ TEST_CASE("LLEvents")
 TEST_CASE("Table Clone OoM")
 {
     runConformance("table_clone_oom.lua", nullptr, [](lua_State *L) {
-       lua_setmemcatbyteslimit(L, 200);
-       lua_pushcfunction(L, [](lua_State *L) {lua_setmemcat(L, 2); return 0;}, "change_memcat");
-       lua_setglobal(L, "change_memcat");
-   });
-}
+        RuntimeState* state = (RuntimeState*)L->userdata;
+        state->max_mem = 200;
 
-TEST_CASE("Responsive GC")
-{
-    runConformance("responsive_gc.lua", nullptr, [](lua_State *L) {
-        lua_pushcfunction(L, [](lua_State *L) {lua_setmemcat(L, 2); return 0;}, "change_memcat");
+        lua_pushcfunction(L, [](lua_State *L) {lua_setmemcat(L, luaL_checkinteger(L, 1)); return 0;}, "change_memcat");
         lua_setglobal(L, "change_memcat");
-        lua_setmemcatbyteslimit(L, 11000);
-        lua_callbacks(L)->interrupt = [](lua_State *L, int gc) {
-            if (gc < 0 && L->activememcat > 1 && lua_totalbytes(L, L->activememcat) > 9000)
-                luaSL_emergencyfinishgc(L);
-        };
+
+        lua_callbacks(L)->beforeallocate = memoryLimitCallback;
     });
 }
 
 TEST_CASE("User thread alloc size calculation")
 {
     runConformance("responsive_gc.lua", nullptr, [](lua_State *L) {
-        lua_pushcfunction(L, [](lua_State *L) {lua_setmemcat(L, 2); return 0;}, "change_memcat");
+        RuntimeState* state = (RuntimeState*)L->userdata;
+        state->max_mem = 11000;
+
+        lua_pushcfunction(L, [](lua_State *L) {lua_setmemcat(L, luaL_checkinteger(L, 1)); return 0;}, "change_memcat");
         lua_setglobal(L, "change_memcat");
 
-        lua_callbacks(L)->beforeallocate = [](lua_State *L, size_t osize, size_t nsize) {
-            constexpr size_t MAX_MEM = 11000;
-            static size_t actual_size = 0;
-            static size_t approximate_size = 0;
-
-            L = lua_mainthread(L);
-
-            // This is a net shrink in memory, not relevant for our limiting logic. We can't assume that
-            // memory being freed has anything to do with us, given that the GC can work on things unrelated
-            // to the currently executing task.
-            if (osize >= nsize)
-                return 0;
-
-            size_t net_gain = nsize - osize;
-
-            // Figure out the actual current size of the heap if we didn't already have it,
-            // or the alloc would push us over the limit given the current approximate size.
-            if (actual_size == 0 || (approximate_size + net_gain > MAX_MEM))
-            {
-                approximate_size = actual_size = lua_userthreadsize(L, nullptr);
-
-                if (actual_size + net_gain > MAX_MEM)
-                    return 1;
-            }
-
-            approximate_size += net_gain;
-
-            return 0;
-        };
+        lua_callbacks(L)->beforeallocate = memoryLimitCallback;
     });
 }
 
