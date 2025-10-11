@@ -342,10 +342,6 @@ LUA_API void lua_setmemcat(lua_State* L, int category);
 LUA_API int lua_getmemcat(lua_State* L);
 LUA_API size_t lua_totalbytes(lua_State* L, int category);
 
-// ServerLua: used for setting a memcat byte size limit for memcat IDs above 1.
-// setting a limit of "0" disables the memory limit.
-LUA_API void lua_setmemcatbyteslimit(lua_State* L, lua_Unsigned bytes_limit);
-
 /*
 ** miscellaneous functions
 */

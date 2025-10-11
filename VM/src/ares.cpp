@@ -2823,8 +2823,6 @@ static void scavenge_sl_vm_internals(lua_State *L, bool forUnpersist) {
     eris_ifassert(const int top = lua_gettop(L));
     int perms_idx = lua_gettop(L);
 
-    auto *runtime_state = (lua_SLRuntimeState*)lua_getthreaddata(L);
-
     const std::vector<std::pair<const char *, int>> lsl_vm_refs {
         // none for now
     };
@@ -3004,6 +3002,10 @@ void eris_register_perms(lua_State *L, bool for_unpersist) {
 
 static void
 unchecked_persist(lua_State *L, std::ostream *writer) {
+  // pause GC for the duration of serialization - some objects we're creating aren't rooted
+  // Also prevents beforeallocate callbacks from being invoked during setup
+  ScopedDisableGC _disable_gc(L);
+
   eris_ifassert(int old_top=lua_gettop(L));
   Info info;                                            /* perms buff rootobj */
   info.L = L;
@@ -3064,11 +3066,7 @@ unchecked_persist(lua_State *L, std::ostream *writer) {
 #endif
 
   p_header(&info);
-  {
-      ScopedDisableGC _disable_gc(L);
-
-      persist(&info);                     /* perms reftbl buff path? rootobj */
-  }
+  persist(&info);                          /* perms reftbl buff path? rootobj */
 
 #if HARDSTACKTESTS
   lua_pop(L, LUA_MINSTACK - pre_pad_top);
@@ -3084,6 +3082,10 @@ unchecked_persist(lua_State *L, std::ostream *writer) {
 
 static void
 unchecked_unpersist(lua_State *L, std::istream *reader) {/* perms str? */
+  // pause GC for the duration of deserialization - some objects we're creating aren't rooted
+  // Also prevents beforeallocate callbacks from being invoked during setup
+  ScopedDisableGC _disable_gc(L);
+
   eris_ifassert(int old_top = lua_gettop(L));
   Info info;
   info.L = L;
@@ -3128,32 +3130,27 @@ unchecked_unpersist(lua_State *L, std::istream *reader) {/* perms str? */
   eris_populate_perms(L, true);
   lua_pop(L, 1);                              /* perms reftbl nil? path? str? */
 
-  // pause GC for the duration of deserialization - some objects we're creating aren't rooted
-  {
-    ScopedDisableGC _disable_gc(L);
-
 #if HARDSTACKTESTS
-    // Arrange the stack to make it more likely that we hit any lua_checkstack() misuse
-    int pre_pad_top = lua_gettop(L);
-    lua_checkstack(L, LUA_MINSTACK);
-    while (lua_gettop(L) != LUA_MINSTACK - 1) {
-        lua_pushnil(L);
-    }
-    // A reference to the root obj needs to end back up on top
-    lua_pushvalue(L, pre_pad_top);
-    eris_assert(lua_gettop(L) == LUA_MINSTACK);
-#endif
-
-    u_header(&info);
-    unpersist(&info);                 /* perms reftbl nil? path? str? rootobj */
-
-#if HARDSTACKTESTS
-    // Slot the top of the stack back in where it should be
-    lua_replace(L, pre_pad_top + 1);
-    lua_pop(L, LUA_MINSTACK - pre_pad_top - 1);
-    eris_assert(lua_gettop(L) == pre_pad_top + 1);
-#endif
+  // Arrange the stack to make it more likely that we hit any lua_checkstack() misuse
+  int pre_pad_top = lua_gettop(L);
+  lua_checkstack(L, LUA_MINSTACK);
+  while (lua_gettop(L) != LUA_MINSTACK - 1) {
+      lua_pushnil(L);
   }
+  // A reference to the root obj needs to end back up on top
+  lua_pushvalue(L, pre_pad_top);
+  eris_assert(lua_gettop(L) == LUA_MINSTACK);
+#endif
+
+  u_header(&info);
+  unpersist(&info);                   /* perms reftbl nil? path? str? rootobj */
+
+#if HARDSTACKTESTS
+  // Slot the top of the stack back in where it should be
+  lua_replace(L, pre_pad_top + 1);
+  lua_pop(L, LUA_MINSTACK - pre_pad_top - 1);
+  eris_assert(lua_gettop(L) == pre_pad_top + 1);
+#endif
 
   if (info.generatePath) {              /* perms reftbl nil path str? rootobj */
     lua_remove(L, PATHIDX);                  /* perms reftbl nil str? rootobj */
@@ -3514,18 +3511,10 @@ eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat) {
   // Make sure any objects we create during deserialization are created with the desired memcat
   lua_setmemcat(Lforker, memcat);
 
-  // We need to relax the bytes limit so that we don't fail due to garbage generated during deserialization.
-  int old_bytes_limit = Lforker->global->memcatbyteslimit;
-  lua_setmemcatbyteslimit(Lforker, 0);
   int status = eris_unpersist(Lforker, -1, -2); /* Lforker: state serialized uperms new_th */
-
-  // Get rid of any garbage created during deserialization if we're using memcat-based memory limits
-  if (old_bytes_limit)
-    lua_gc(Lforker, LUA_GCCOLLECT, 0);
 
   // Done, set the memcat back to the main one.
   lua_setmemcat(Lforker, 0);
-  lua_setmemcatbyteslimit(Lforker, old_bytes_limit);
 
   if (status == LUA_OK) {
     eris_assert(lua_isthread(Lforker, -1));

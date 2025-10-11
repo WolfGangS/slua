@@ -1189,34 +1189,6 @@ YieldableStatus luaSL_may_interrupt(lua_State *L)
     return YieldableStatus::OK;
 }
 
-void luaSL_emergencyfinishgc(lua_State *L)
-{
-    global_State *g = L->global;
-    size_t limit = g->memcatbyteslimit;
-    if (!limit)
-    {
-        // Nothing to do here, we're not using memcat memory limits
-        // so we don't need to dynamically tune the GC.
-        return;
-    }
-
-    // We want GC to get more aggressive as memory fills up, but we don't
-    // want to waste a lot of time on GC if we're not really allocating
-    // things very fast anyway. Only start getting aggressive once we start
-    // getting near limits.
-    int cycle_count = 0;
-    while (true) {
-        // We need to fix `GCthreshold` so assertions in lgc hold true.
-        g->GCthreshold = std::min(g->GCthreshold, g->totalbytes);
-
-        // This logic is copied from Lua 5.1.4's emergency collector.
-        /* only allow the GC to finish at least 1 full cycle. */
-        if (g->gcstate == GCSpause && ++cycle_count > 1)
-            break;
-        luaC_step(L, false);
-    }
-}
-
 int luaSL_pushnativeinteger(lua_State *L, int val)
 {
     if (LUAU_IS_LSL_VM(L))

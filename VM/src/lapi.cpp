@@ -1661,11 +1661,6 @@ int lua_getmemcat(lua_State* L)
     return L->activememcat;
 }
 
-void lua_setmemcatbyteslimit(lua_State* L, lua_Unsigned bytes_limit)
-{
-    L->global->memcatbyteslimit = bytes_limit;
-}
-
 size_t lua_totalbytes(lua_State* L, int category)
 {
     api_check(L, category < LUA_MEMORY_CATEGORIES);
@@ -2197,7 +2192,6 @@ CLANG_NOOPT void GCC_NOOPT lua_useconstsstate(lua_State *L, lua_State * constsL)
         runtime_state->uuidCompressedWeakTab = consts_runtime_state->uuidCompressedWeakTab;
     }
 
-    L->global->memcatbyteslimit = constsL->global->memcatbyteslimit;
     *lua_callbacks(L) = *lua_callbacks(constsL);
 
     // Make sure we didn't muck up `L` very much

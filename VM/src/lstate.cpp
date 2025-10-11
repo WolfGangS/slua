@@ -233,7 +233,6 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
 
     g->memcatbytes[0] = sizeof(LG);
     // ServerLua: additional book-keeping
-    g->memcatbyteslimit = 0;
     g->calltailinterruptcheck = 0;
 
     g->cb = lua_Callbacks();

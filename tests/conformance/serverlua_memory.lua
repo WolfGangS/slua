@@ -14,6 +14,7 @@ local success, ret = xpcall(
 		end)
 assert(not success)
 assert(ret == "not enough memory")
+assert(#foo > 225)
 assert(#foo < 20000)
 
 return 'OK'

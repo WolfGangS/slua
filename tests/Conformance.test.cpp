@@ -959,6 +959,9 @@ TEST_CASE("Ares bad serialize state")
     luaC_validate(GL);
 }
 
+// Used just for this test
+static lua_OpaqueGCObjectSet free_objects;
+
 TEST_CASE("ServerLua memory limits")
 {
     std::string source = getConformanceTestSource("serverlua_memory.lua");
@@ -1008,8 +1011,34 @@ TEST_CASE("ServerLua memory limits")
     }
 
     lua_State* Lforker = eris_make_forkserver(L);
-    // 10kb memory limit
-    lua_setmemcatbyteslimit(Lforker, 10000);
+
+    // Collect free objects from the loaded bytecode
+    free_objects = lua_collectfreeobjects(Lforker);
+
+    // 10kb memory limit using beforeallocate callback with reachability-based accounting
+    lua_callbacks(Lforker)->beforeallocate = [](lua_State* L, size_t osize, size_t nsize) -> int {
+        constexpr size_t MAX_MEM = 10000;
+        static size_t actual_size = 0;
+        static size_t approximate_size = 0;
+
+        // Ignore shrinking allocations
+        if (osize >= nsize)
+            return 0;
+
+        size_t net_gain = nsize - osize;
+
+        // Re-calculate actual size if we haven't yet or if approximate would exceed limit
+        if (actual_size == 0 || (approximate_size + net_gain > MAX_MEM))
+        {
+            approximate_size = actual_size = lua_userthreadsize(L, &free_objects);
+
+            if (actual_size + net_gain > MAX_MEM)
+                return 1;
+        }
+
+        approximate_size += net_gain;
+        return 0;
+    };
     // Don't need the original thread on the main stack anymore
     lua_remove(GL, -2);
 

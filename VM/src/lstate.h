@@ -235,11 +235,6 @@ typedef struct global_State
 #ifdef LUAI_GCMETRICS
     GCMetrics gcmetrics;
 #endif
-    // ServerLua: byte allocation limit for memcats above 1,
-    // memcat "1" is treated as the "garbage" memcat, and everything in
-    // it is immediately collectible. 0 is the "system" memcat, and is
-    // used for all allocations that users don't directly control.
-    uint32_t memcatbyteslimit;
 } global_State;
 // clang-format on
 

@@ -68,8 +68,6 @@ LUA_API int luaSL_pushnativeinteger(lua_State *L, int val);
 LUA_API uint8_t luaSL_lsl_type(lua_State *L, int idx);
 /// Should only be called in an interrupt handler!
 LUA_API YieldableStatus luaSL_may_interrupt(lua_State *L);
-// Keep going with GC until we hit the sweep phase, we need some memory.
-LUA_API void luaSL_emergencyfinishgc(lua_State *L);
 
 typedef struct lua_TValue TValue;
 uint8_t lua_lsl_type(const TValue *tv);
