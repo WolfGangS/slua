@@ -806,7 +806,7 @@ static int ll_getfreememory(lua_State *L)
 {
     luaC_fullgc(L);
     luaX_graphheap(L, "/tmp/whatever.json");
-    luaSL_pushnativeinteger(L, (int)lua_userthreadsize(L));
+    luaSL_pushnativeinteger(L, (int)lua_userthreadsize(L, nullptr));
     return 1;
 }
 

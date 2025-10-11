@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <istream>
 #include <ostream>
+#include <unordered_set>
 
 #include "luaconf.h"
 
@@ -134,6 +135,9 @@ typedef int lua_Integer;
 
 // unsigned integer type
 typedef unsigned lua_Unsigned;
+
+// ServerLua: opaque set of GC object pointers for per-script memory accounting
+typedef std::unordered_set<void*> lua_OpaqueGCObjectSet;
 
 /*
 ** state manipulation
@@ -396,7 +400,11 @@ LUA_API void lua_useconstsstate(lua_State* L, lua_State * constsL);
 // Get how much "real" memory is used by pages.
 LUA_API int lua_totalmemoverhead(lua_State *L);
 // Gets the total size of all user-allocated objects reachable from a user thread.
-LUA_API size_t lua_userthreadsize(lua_State *L);
+// If free_objects is provided, objects in that set will be excluded from the size calculation.
+LUA_API size_t lua_userthreadsize(lua_State *L, const lua_OpaqueGCObjectSet* free_objects);
+// Collects all memcat 2+ objects reachable from a user thread into a set.
+// Intended to be called immediately after luau_load() to capture bytecode constants.
+LUA_API lua_OpaqueGCObjectSet lua_collectfreeobjects(lua_State *L);
 
 
 /*

@@ -2205,7 +2205,7 @@ CLANG_NOOPT void GCC_NOOPT lua_useconstsstate(lua_State *L, lua_State * constsL)
     luaC_validate(L);
 }
 
-size_t lua_userthreadsize(lua_State *L)
+size_t lua_userthreadsize(lua_State *L, const lua_OpaqueGCObjectSet* free_objects)
 {
     size_t total_size = 0;
     luaC_enumreachableuserallocs(
@@ -2213,9 +2213,15 @@ size_t lua_userthreadsize(lua_State *L)
         &total_size,
         [](void* context, GCObject* ptr, uint8_t tt, uint8_t memcat, size_t size) {
             *((size_t*)context) += size;
-        }
+        },
+        free_objects
     );
     // Make sure we include the size of allocs from not-yet-rooted objects.
     // Note that this only makes sense if we call this on a thread that's currently executing.
     return total_size + L->global->unrooteduserallocs;
+}
+
+lua_OpaqueGCObjectSet lua_collectfreeobjects(lua_State *L)
+{
+    return luaC_collectfreeobjects(L);
 }

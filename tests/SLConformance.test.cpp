@@ -600,7 +600,7 @@ TEST_CASE("User thread alloc size calculation")
             // or the alloc would push us over the limit given the current approximate size.
             if (actual_size == 0 || (approximate_size + net_gain > MAX_MEM))
             {
-                approximate_size = actual_size = lua_userthreadsize(L);
+                approximate_size = actual_size = lua_userthreadsize(L, nullptr);
 
                 if (actual_size + net_gain > MAX_MEM)
                     return 1;

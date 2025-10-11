@@ -22,7 +22,7 @@
 typedef struct ReachableContext
 {
     std::queue<GCObject*> queue;
-    std::unordered_set<GCObject*> visited;
+    std::unordered_set<void*> visited;
 } ReachableContext;
 
 static void enqueueobj(ReachableContext* ctx, GCObject* obj)
@@ -372,10 +372,17 @@ static size_t calcgcosize(GCObject *obj)
 void luaC_enumreachableuserallocs(
     lua_State* L,
     void* context,
-    void (*node)(void* context, GCObject* ptr, uint8_t tt, uint8_t memcat, size_t size)
+    void (*node)(void* context, GCObject* ptr, uint8_t tt, uint8_t memcat, size_t size),
+    const lua_OpaqueGCObjectSet* free_objects
 )
 {
     ReachableContext ctx;
+
+    // Pre-populate visited set with free objects if provided
+    if (free_objects)
+    {
+        ctx.visited = *free_objects;
+    }
 
     ctx.queue.push(obj2gco(L));
     ctx.visited.insert(obj2gco(L));
@@ -390,8 +397,30 @@ void luaC_enumreachableuserallocs(
             node(context, current, current->gch.tt, current->gch.memcat, calcgcosize(current));
 
         // Take any new references the current node has and add them to the queue
-        // Even if we don't want to include their size in the calculation, we may still want
-        // to traverse them.
         traverseobj(&ctx, current);
     }
+}
+
+lua_OpaqueGCObjectSet luaC_collectfreeobjects(lua_State* L)
+{
+    lua_OpaqueGCObjectSet free_objects;
+    ReachableContext ctx;
+
+    ctx.queue.push(obj2gco(L));
+    ctx.visited.insert(obj2gco(L));
+
+    while (!ctx.queue.empty())
+    {
+        GCObject* current = ctx.queue.front();
+        ctx.queue.pop();
+
+        // Collect memcat 2+ objects into the set
+        if (current->gch.memcat >= 2)
+            free_objects.insert(current);
+
+        // Traverse child references
+        traverseobj(&ctx, current);
+    }
+
+    return free_objects;
 }

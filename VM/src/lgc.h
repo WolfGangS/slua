@@ -143,11 +143,13 @@ LUAI_FUNC void luaC_enumheap(
     void (*node)(void* context, void* ptr, uint8_t tt, uint8_t memcat, size_t size, const char* name),
     void (*edge)(void* context, void* from, void* to, const char* name)
 );
-// ServerLua: User allocation tracking function
+// ServerLua: User allocation tracking functions
 LUAI_FUNC void luaC_enumreachableuserallocs(
     lua_State* L,
     void* context,
-    void (*node)(void* context, GCObject* ptr, uint8_t tt, uint8_t memcat, size_t size)
+    void (*node)(void* context, GCObject* ptr, uint8_t tt, uint8_t memcat, size_t size),
+    const lua_OpaqueGCObjectSet* free_objects
 );
+LUAI_FUNC lua_OpaqueGCObjectSet luaC_collectfreeobjects(lua_State* L);
 LUAI_FUNC int64_t luaC_allocationrate(lua_State* L);
 LUAI_FUNC const char* luaC_statename(int state);
