@@ -1453,7 +1453,48 @@ bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
 
     if (luau_op != LOP_NOP)
     {
-        // Visit RHS first because LSL is awful
+        // Try to use K-variant opcodes if RHS is a scalar numeric constant with low index
+        if (rhs->getNodeSubType() == NODE_CONSTANT_EXPRESSION &&
+            (rhs->getIType() == LST_INTEGER || rhs->getIType() == LST_FLOATINGPOINT))
+        {
+            auto* rhs_const = static_cast<LSLConstantExpression*>(rhs);
+            auto rhs_const_idx = addConstant(rhs_const->getConstantValue());
+            // Constant index is low enough to fit
+            if (rhs_const_idx >= 0 && rhs_const_idx <= 255)
+            {
+                LuauOpcode k_op = LOP_NOP;
+                switch (op)
+                {
+                case '+':
+                    k_op = LOP_ADDK;
+                    break;
+                case '-':
+                    k_op = LOP_SUBK;
+                    break;
+                case '*':
+                    k_op = LOP_MULK;
+                    break;
+                case '%':
+                    k_op = LOP_MODK;
+                    break;
+                case '/':
+                    k_op = (lhs->getIType() == LST_INTEGER) ? LOP_IDIVK : LOP_DIVK;
+                    break;
+                default:
+                    break;
+                }
+
+                if (k_op != LOP_NOP)
+                {
+                    const auto lhs_reg = handlePositionIndependentExpr(lhs);
+                    mBuilder->emitABC(k_op, target_reg, lhs_reg, (uint8_t)rhs_const_idx);
+                    return false;
+                }
+            }
+        }
+
+        // Okay, this operation wasn't one we could handle with a K-variant opcode.
+        // Evaluate RHS into a register (LSL's right-to-left evaluation order)
         auto rhs_reg = handlePositionIndependentExpr(rhs);
         if (need_rhs_copy)
         {
@@ -1461,6 +1502,27 @@ bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
             mBuilder->emitABC(LOP_MOVE, new_rhs_reg, rhs_reg, 0);
             rhs_reg = new_rhs_reg;
         }
+
+        // Check if we can use RK-variant opcodes for SUB/DIV
+        // Only check this for operations that actually have reversed K-variants
+        if ((op == '-' || op == '/') &&
+            lhs->getNodeSubType() == NODE_CONSTANT_EXPRESSION &&
+            (lhs->getIType() == LST_INTEGER || lhs->getIType() == LST_FLOATINGPOINT))
+        {
+            auto* lhs_const = static_cast<LSLConstantExpression*>(lhs);
+            auto lhs_const_idx = addConstant(lhs_const->getConstantValue());
+
+            // Constant index is low enough to fit
+            if (lhs_const_idx >= 0 && lhs_const_idx <= 255)
+            {
+                LuauOpcode rk_op = (op == '-') ? LOP_SUBRK : LOP_DIVRK;
+                mBuilder->emitABC(rk_op, target_reg, (uint8_t)lhs_const_idx, rhs_reg);
+                // maybeMove(expected_target, target_reg);
+                return false;
+            }
+        }
+
+        // Fallback to regular register-register operations
         const auto lhs_reg = handlePositionIndependentExpr(lhs);
         mBuilder->emitABC(luau_op, target_reg, lhs_reg, rhs_reg);
         // maybeMove(expected_target, target_reg);

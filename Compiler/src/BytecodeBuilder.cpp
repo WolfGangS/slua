@@ -1480,7 +1480,8 @@ void BytecodeBuilder::validateInstructions() const
         case LOP_SUBRK:
         case LOP_DIVRK:
             VREG(LUAU_INSN_A(insn));
-            VCONST(LUAU_INSN_B(insn), Number);
+            // ServerLua: This can be either a Number or an int.
+            VCONSTANY(LUAU_INSN_B(insn));
             VREG(LUAU_INSN_C(insn));
             break;
 

@@ -720,6 +720,42 @@ TEST_CASE("Conformance Test 1")
     CHECK_EQ(YIELD_NUM(state.get()), 1);
 }
 
+TEST_CASE("Constant Arithmetic Optimization")
+{
+    auto state = runConformance("constant_arithmetic.lsl", [](lua_State *L)
+        {
+            float expected;
+            switch(YIELD_NUM(L))
+            {
+                // RHS constant - Float operations
+                case 0: expected = 7.0f; break;
+                case 1: expected = 2.0f; break;
+                case 2: expected = 20.0f; break;
+                case 3: expected = 2.5f; break;
+
+                // RHS constant - Integer operations
+                case 4: expected = 13.0f; break;
+                case 5: expected = 6.0f; break;
+                case 6: expected = 20.0f; break;
+                case 7: expected = 3.0f; break;
+                case 8: expected = 1.0f; break;
+
+                // LHS constant - Float operations
+                case 9: expected = 5.0f; break;
+                case 10: expected = 4.0f; break;
+
+                // LHS constant - Integer operations
+                case 11: expected = 10.0f; break;
+                case 12: expected = 3.0f; break;
+
+                default: assert(0);
+            }
+            CHECK_EQ(luaL_checknumber(L, 1), expected);
+            return -1;
+        });
+    CHECK_EQ(YIELD_NUM(state.get()), 13);
+}
+
 TEST_CASE("Conformance Test 2")
 {
     auto state = runConformance("conformance2.lsl", [](lua_State *L)
