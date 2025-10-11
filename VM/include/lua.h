@@ -521,7 +521,6 @@ LUA_API lua_State *eris_make_forkserver(lua_State *Lsrc);
 
 LUA_API lua_State *eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat);
 LUA_API int eris_serialize_thread(lua_State *Lforker, lua_State *L);
-LUA_API void eris_release_fork(lua_State *LFork);
 LUA_API void eris_set_compile_func(void (*compile_func)(lua_State*, int));
 LUA_API void eris_dump(lua_State* L, std::ostream *writer);
 LUA_API void eris_set_setting(lua_State *L, const char *name, int value);

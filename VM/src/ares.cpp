@@ -3568,45 +3568,6 @@ eris_serialize_thread(lua_State *Lforker, lua_State *L) {
   return status;
 }
 
-
-
-typedef struct {
-  uint8_t target_memcat;
-} ReleaseForkContext;
-
-static bool releaseforkgco(void *context, lua_Page *page, GCObject *gc) {
-    auto *rfcontext = (ReleaseForkContext *)context;
-    if (gc->gch.memcat != rfcontext->target_memcat)
-        return false;
-    // re-associate this GCObject with the "junk" memcat
-    gc->gch.memcat = 1;
-    return false;
-}
-
-/// Should be called immediately before dropping the last reference to a fork
-/// that has a fork-specific memcat.
-LUA_API void
-eris_release_fork(lua_State *LFork) {
-  // Doing this doesn't make sense if we don't have a fork-specific memcat!
-  eris_assert(LFork->activememcat >= 2);
-
-  uint8_t old_memcat = LFork->activememcat;
-  // There should be no further allocs by this point, but set the active memcat to
-  // the junk memcat for safety.
-  LFork->activememcat = 1;
-
-  // Free up the memcat that was previously associated with this fork by re-associating
-  // all of its GCObjects with the "junk" memcat of 1.
-  ReleaseForkContext context = {old_memcat};
-  luaM_visitgco(LFork, (void *)&context, releaseforkgco);
-
-  // Move the alloc costs over to the "junk" memcat, which has no memory limits.
-  // Everything in this memcat should be collectible immediate
-  global_State *glob_state = LFork->global;
-  glob_state->memcatbytes[1] += glob_state->memcatbytes[old_memcat];
-  glob_state->memcatbytes[old_memcat] = 0;
-}
-
 LUA_API void
 eris_set_compile_func(void (*compile_func)(lua_State*, int)) {
   sAresCodeGenCompile = compile_func;

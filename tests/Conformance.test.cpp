@@ -1044,34 +1044,16 @@ TEST_CASE("ServerLua memory limits")
 
     for (int i = 0; i < 4; ++i)
     {
-        // because we clean up the state at the end of each loop it's ok
-        // for us to reuse memcats.
-        const uint8_t memcat = 2;
-        lua_State* Lchild = eris_fork_thread(Lforker, true, memcat);
-        // "user" memcats start from 2.
+        const uint8_t USER_MEMCAT = 2;
+        lua_State* Lchild = eris_fork_thread(Lforker, true, USER_MEMCAT);
         int status = lua_resume(Lchild, nullptr, 0);
         REQUIRE(status == 0);
 
         REQUIRE(lua_isstring(Lchild, -1));
         CHECK(std::string(lua_tostring(Lchild, -1)) == "OK");
 
-        // should still be something in the current memcat
-        size_t memcat_size = lua_totalbytes(GL, memcat);
-        CHECK((memcat_size != 0));
-        // should be nothing in the "junk" memcat
-        CHECK((lua_totalbytes(GL, 1) == 0));
-        eris_release_fork(Lchild);
-
-        // Everything should be in the "junk" memcat now
-        CHECK((lua_totalbytes(GL, 1) == memcat_size));
-
-        lua_pop(GL, 1);
-
-        lua_gc(L, LUA_GCCOLLECT, 0);
-        // all of the garbage should have been collected
-        CHECK((lua_totalbytes(GL, 1) == 0));
-        // Nothing crazy should have happened with the previous memcat
-        CHECK((lua_totalbytes(GL, memcat) == 0));
+        // should still be some data owned by the current thread
+        CHECK((lua_userthreadsize(Lchild, &free_objects) != 0));
     }
 
     extern void luaC_validate(lua_State * L); // internal function, declared in lgc.h - not exposed via lua.h
