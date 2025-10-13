@@ -6,7 +6,8 @@
 
 #include <string.h>
 #include <time.h>
-#include <type_traits>
+
+#include "miniy2038.h"
 
 #define LUA_STRFTIMEOPTIONS "aAbBcdHIjmMpSUwWxXyYzZ%"
 
@@ -21,9 +22,6 @@ static tm* localtime_r(const time_t* timep, tm* result)
     return localtime_s(result, timep) == 0 ? result : NULL;
 }
 #endif
-
-// ServerLua: use a 64-bit time if we're on a platform with 32-bit times.
-using lua_time_t = std::conditional<sizeof(time_t) != sizeof(int32_t), time_t, int64_t>::type;
 
 static lua_time_t os_timegm(struct tm* timep)
 {
@@ -113,28 +111,31 @@ static int getfield(lua_State* L, const char* key, int d)
     return res;
 }
 
+
 static tm *os_gmtime_r(const lua_time_t *t, struct tm *tm)
 {
-    time_t clamp_time = (time_t)*t;
-    // Can use the platform gmtime_r
-    if (sizeof(time_t) != sizeof(int32_t))
+    // Can use the platform gmtime_r on 64-bit time_t platforms
+    // or if the year is small enough
+    if (sizeof(time_t) != sizeof(int32_t) || tm->tm_year <= 2037)
     {
+        time_t clamp_time = (time_t)*t;
         return gmtime_r(&clamp_time, tm);
     }
-    // TODO: y2038 polyfills for 32-bit time_t
-    return gmtime_r(&clamp_time, tm);
+    // Use y2038 gmtime64_r for 32-bit time_t platforms
+    return gmtime64_r_y2038(t, tm);
 }
 
 static tm *os_localtime_r(const lua_time_t *t, struct tm *tm)
 {
-    time_t clamp_time = (time_t)*t;
-    // Can use the platform localtime_r
-    if (sizeof(time_t) != sizeof(int32_t))
+    // Can use the platform localtime_r on 64-bit time_t platforms
+    // or if the year is small enough
+    if (sizeof(time_t) != sizeof(int32_t) || tm->tm_year <= 2037)
     {
+        time_t clamp_time = (time_t)*t;
         return localtime_r(&clamp_time, tm);
     }
-    // TODO: y2038 polyfills for 32-bit time_t
-    return localtime_r(&clamp_time, tm);
+    // Use y2038 localtime64_r for 32-bit time_t platforms
+    return localtime64_r_y2038(t, tm);
 }
 
 static int os_date(lua_State* L)

@@ -53,7 +53,7 @@ pushd "$top"
             # These flags are all that are needed to successfully pass the conformance tests under -m32.
             # 64-bit times are needed for the time tests, and SSE is needed so that x87 is not
             # used for floating point math. SSE is the default under x64, so not a problem.
-            LL_BUILD_RELEASE="${LL_BUILD_RELEASE} -msse3 -mfpmath=sse"
+            LL_BUILD_RELEASE="${LL_BUILD_RELEASE} -msse3 -mfpmath=sse -D_TIME_BITS=64 -D_FILE_OFFSET_BITS=64"
         ;;
     esac
 

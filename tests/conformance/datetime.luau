@@ -17,6 +17,9 @@ assert(os.date(string.rep("%d", 1000), t) ==
        string.rep(os.date("%d", t), 1000))
 assert(os.date(string.rep("%", 200)) == string.rep("%", 100))
 assert(os.date("", -1) == nil)
+-- ServerLua: ensure no year 2038 problems
+assert(os.date("!%c", 2177452803) == "Sat Jan  1 00:00:03 2039")
+assert(os.date("!%c", 2077452803) == "Wed Oct 31 14:13:23 2035")
 
 assert(os.time({ year = 1969, month = 12, day = 31, hour = 23, min = 59, sec = 59}) == nil) -- just before start
 assert(os.time({ year = 1970, month = 1, day = 1, hour = 0, min = 0, sec = 0}) == 0) -- start

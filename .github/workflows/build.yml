@@ -33,7 +33,7 @@ jobs:
             cflags: "-DHARDSTACKTESTS=1"
           - os: {name: ubuntu-32bit, version: ubuntu-latest}
             addrsize: "32"
-            cflags: "-msse3 -mfpmath=sse"
+            cflags: "-msse3 -mfpmath=sse -D_TIME_BITS=64 -D_FILE_OFFSET_BITS=64"
     name: ${{matrix.os.name}}
     runs-on: ${{matrix.os.version}}
     steps:

@@ -416,6 +416,8 @@ target_sources(Luau.VM PRIVATE
     VM/src/mono_floats.h
     VM/src/mono_strings.cpp
     VM/src/mono_strings.h
+    VM/src/miniy2038.cpp
+    VM/src/miniy2038.h
 
     # ServerLua: CJson
     VM/src/cjson/dtoa_config.h
