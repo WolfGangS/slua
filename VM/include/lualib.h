@@ -18,6 +18,7 @@ typedef struct luaL_Reg luaL_Reg;
 LUALIB_API void luaL_register(lua_State* L, const char* libname, const luaL_Reg* l);
 // ServerLua: added to allow updating existing modules
 LUALIB_API void luaL_register_noclobber(lua_State* L, const char* libname, const luaL_Reg* l);
+LUALIB_API void luaL_register_noclobber_compat(lua_State* L, const char* libname, const luaL_Reg* l, bool compat_mode);
 LUALIB_API int luaL_getmetafield(lua_State* L, int obj, const char* e);
 LUALIB_API int luaL_callmeta(lua_State* L, int obj, const char* e);
 LUALIB_API l_noret luaL_typeerrorL(lua_State* L, int narg, const char* tname);
@@ -156,6 +157,7 @@ LUALIB_API int luaopen_llbase64(lua_State* L);
 LUALIB_API int luaopen_cjson(lua_State* L);
 
 #define LUA_LLLIBNAME "ll"
+#define LUA_LLCOMPATLIBNAME "llcompat"
 LUALIB_API int luaopen_ll(lua_State* L, int testing_funcs);
 
 #define LUA_VECLIBNAME "vector"

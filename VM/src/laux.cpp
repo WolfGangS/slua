@@ -342,6 +342,33 @@ void luaL_register_noclobber(lua_State* L, const char* libname, const luaL_Reg* 
     }
 }
 
+void luaL_register_noclobber_compat(lua_State* L, const char* libname, const luaL_Reg* l, bool compat_mode)
+{
+    if (libname)
+    {
+        // check whether lib already exists
+        luaL_findtable(L, LUA_REGISTRYINDEX, "_LOADED", 1);
+        lua_getfield(L, -1, libname); // get _LOADED[libname]
+        if (!lua_istable(L, -1))
+        {                  // not found?
+            lua_pop(L, 1); // remove previous result
+            luaL_error(L, "'%s' is not an existing module", libname);
+        }
+        lua_remove(L, -2); // remove _LOADED table
+    }
+    for (; l->name; l++)
+    {
+        bool exists = lua_getfield(L, -1, l->name) != LUA_TNIL;
+        lua_pop(L, 1);
+        if (!exists)
+        {
+            lua_pushboolean(L, compat_mode);
+            lua_pushcclosurek(L, l->func, l->name, 1, nullptr);
+            lua_setfield(L, -2, l->name);
+        }
+    }
+}
+
 const char* luaL_findtable(lua_State* L, int idx, const char* fname, int szhint)
 {
     const char* e;

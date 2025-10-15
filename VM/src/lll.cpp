@@ -32,8 +32,22 @@ static int ll_getlistlength(lua_State *L)
     return 1;
 }
 
-static int _to_positive_index(int len, int idx)
+static int _to_positive_index(lua_State *L, int len, int idx, bool compat_mode)
 {
+    if (!compat_mode)
+    {
+        if (idx == 0)
+        {
+            luaL_error(L, "passed 0 when a 1-based index was expected");
+        }
+        else if (idx > 0)
+        {
+            // positive indices need to be shifted down to be 0-based.
+            // negative indices are handled later.
+            idx -= 1;
+        }
+    }
+
     if(idx < 0)
     {
         return len + idx;
@@ -46,8 +60,8 @@ static int _list_accessor_helper(lua_State *L, LSLIType type)
     luaL_checktype(L, 1, LUA_TTABLE);
     auto *h = hvalue(luaA_toobject(L, 1));
     int len = luaH_getn(h);
-
-    int idx = _to_positive_index(len, luaL_checkinteger(L, 2));
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
+    int idx = _to_positive_index(L, len, luaL_checkinteger(L, 2), compat_mode);
     if (idx < len && idx >= 0)
     {
         lua_pushcfunction(L, lsl_cast_list_elem, "lsl_cast_list_elem");
@@ -72,7 +86,16 @@ static int ll_list2string(lua_State *L)
 static int ll_list2integer(lua_State *L)
 {
     if (!_list_accessor_helper(L, LSLIType::LST_INTEGER))
-        luaSL_pushinteger(L, 0);
+    {
+        luaSL_pushnativeinteger(L, 0);
+    }
+
+    if (!LUAU_IS_LSL_VM(L))
+    {
+        // LSL integer -> number
+        luaSL_pushnativeinteger(L, lua_tointeger(L, -1));
+        lua_replace(L, -2);
+    }
     return 1;
 }
 
@@ -96,7 +119,9 @@ static int ll_list2vector(lua_State *L)
     auto *h = hvalue(luaA_toobject(L, 1));
     int len = luaH_getn(h);
 
-    int idx = _to_positive_index(len, luaL_checkinteger(L, 2));
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
+
+    int idx = _to_positive_index(L, len, luaL_checkinteger(L, 2), compat_mode);
     if (idx < len && idx >= 0)
     {
         // This accessor does NOT auto-cast!
@@ -117,7 +142,9 @@ static int ll_list2rot(lua_State *L)
     auto *h = hvalue(luaA_toobject(L, 1));
     int len = luaH_getn(h);
 
-    int idx = _to_positive_index(len, luaL_checkinteger(L, 2));
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
+
+    int idx = _to_positive_index(L, len, luaL_checkinteger(L, 2), compat_mode);
     if (idx < len && idx >= 0)
     {
         // This accessor does NOT auto-cast!
@@ -138,7 +165,9 @@ static int ll_getlistentrytype(lua_State *L)
     auto *h = hvalue(luaA_toobject(L, 1));
     int len = luaH_getn(h);
 
-    int idx = _to_positive_index(len, luaL_checkinteger(L, 2));
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
+
+    int idx = _to_positive_index(L, len, luaL_checkinteger(L, 2), compat_mode);
     if (idx < len && idx >= 0)
     {
         luaSL_pushinteger(L, lua_lsl_type(&h->array[idx]));
@@ -163,8 +192,10 @@ static int ll_list2list(lua_State *L)
         return 1;
     }
 
-    int target1 = _to_positive_index(len, luaL_checkunsigned(L, 2));
-    int target2 = _to_positive_index(len, luaL_checkunsigned(L, 3));
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
+
+    int target1 = _to_positive_index(L, len, luaL_checkunsigned(L, 2), compat_mode);
+    int target2 = _to_positive_index(L, len, luaL_checkunsigned(L, 3), compat_mode);
 
     int wanted_len = 0;
 
@@ -304,8 +335,10 @@ static int ll_deletesublist(lua_State *L)
         return 1;
     }
 
-    int target1 = _to_positive_index(len, luaL_checkunsigned(L, 2));
-    int target2 = _to_positive_index(len, luaL_checkunsigned(L, 3));
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
+
+    int target1 = _to_positive_index(L, len, luaL_checkunsigned(L, 2), compat_mode);
+    int target2 = _to_positive_index(L, len, luaL_checkunsigned(L, 3), compat_mode);
 
     if (target1 <= target2)
     {
@@ -364,7 +397,8 @@ static int ll_deletesublist(lua_State *L)
         count = std::max(0,count);
 
         // This is basically a special case of list2list
-        lua_pushcfunction(L, ll_list2list, "ll_list2list");
+        lua_pushboolean(L, true);
+        lua_pushcclosurek(L, ll_list2list, "ll_list2list", 1, nullptr);
         lua_pushvalue(L, 1);
         luaSL_pushinteger(L, target2 + 1);
         luaSL_pushinteger(L, target2 + count);
@@ -383,7 +417,10 @@ static int ll_listinsertlist(lua_State *L)
     luaL_checktype(L, 2, LUA_TTABLE);
     auto *src_h = hvalue(luaA_toobject(L, 2));
     int src_len = luaH_getn(src_h);
-    int target = _to_positive_index(dest_len, luaL_checkunsigned(L, 3));
+
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
+
+    int target = _to_positive_index(L, dest_len, luaL_checkunsigned(L, 3), compat_mode);
 
     LuaTable *cloned_h = nullptr;
     TValue new_tv;
@@ -444,7 +481,8 @@ static int ll_listreplacelist(lua_State *L)
     luaL_checktype(L, 2, LUA_TTABLE);
     int orig_len = lua_objlen(L, 1);
     // Let llDeleteSubList handle the tricky part.
-    lua_pushcfunction(L, ll_deletesublist, "ll_deletesublist");
+    lua_pushboolean(L, true);
+    lua_pushcclosurek(L, ll_deletesublist, "ll_deletesublist", 1, nullptr);
     lua_pushvalue(L, 1);
     lua_pushvalue(L, 3);
     lua_pushvalue(L, 4);
@@ -457,7 +495,10 @@ static int ll_listreplacelist(lua_State *L)
 
     auto *src_h = hvalue(luaA_toobject(L, 2));
     int src_len = luaH_getn(src_h);
-    int target = _to_positive_index(orig_len, luaL_checkunsigned(L, 3));
+
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
+
+    int target = _to_positive_index(L, orig_len, luaL_checkunsigned(L, 3), compat_mode);
 
     LuaTable *cloned_h = nullptr;
     TValue new_tv;
@@ -483,7 +524,8 @@ static int ll_listreplacelist(lua_State *L)
 
     target = std::min(target, dest_len);
     // llListInsertList can handle this.
-    lua_pushcfunction(L, ll_listinsertlist, "ll_listinsertlist");
+    lua_pushboolean(L, true);
+    lua_pushcclosurek(L, ll_listinsertlist, "ll_listinsertlist", 1, nullptr);
     lua_pushvalue(L, 1);
     lua_pushvalue(L, 2);
     luaSL_pushinteger(L, target);
@@ -722,18 +764,7 @@ static const luaL_Reg lllib[] = {
     {"Fabs", ll_fabs},
     {"Sin", ll_sin},
     {"GetListLength", ll_getlistlength},
-    {"List2String", ll_list2string},
-    {"List2Integer", ll_list2integer},
-    {"List2Float", ll_list2float},
-    {"List2Key", ll_list2key},
-    {"List2Vector", ll_list2vector},
-    {"List2Rot", ll_list2rot},
-    {"GetListEntryType", ll_getlistentrytype},
-    {"List2List", ll_list2list},
     {"DumpList2String", ll_dumplist2string},
-    {"DeleteSubList", ll_deletesublist},
-    {"ListInsertList", ll_listinsertlist},
-    {"ListReplaceList", ll_listreplacelist},
     {"Log", ll_log},
     {"Log10", ll_log10},
     {"Atan2", ll_atan2},
@@ -751,6 +782,23 @@ static const luaL_Reg lllib[] = {
     {NULL, NULL},
 };
 
+// Functions that have index semantics need to be registered differently,
+// as they need an upvalue dictating them how to behave.
+static const luaL_Reg llcompateligiblelib[] = {
+    {"List2String", ll_list2string},
+    {"List2Integer", ll_list2integer},
+    {"List2Float", ll_list2float},
+    {"List2Key", ll_list2key},
+    {"List2Vector", ll_list2vector},
+    {"List2Rot", ll_list2rot},
+    {"GetListEntryType", ll_getlistentrytype},
+    {"List2List", ll_list2list},
+    {"DeleteSubList", ll_deletesublist},
+    {"ListInsertList", ll_listinsertlist},
+    {"ListReplaceList", ll_listreplacelist},
+    {NULL, NULL},
+};
+
 
 // These are functions that may be used in tests or in the REPL,
 // but are not to be used in user-provided scripts
@@ -764,6 +812,7 @@ static int ll_getsubstring(lua_State* L)
 {
     // Not even close to LSL semantics, also not memory-safe, but
     //  useful for demo purposes. Should never be used outside of tests.
+    // TODO: Make this crap use the utf8 <-> codepoint stuff.
     const auto *str_val = luaL_checkstring(L, 1);
     const auto start_idx = luaL_checkinteger(L, 2);
     const auto end_idx = luaL_checkinteger(L, 3);
@@ -825,12 +874,38 @@ static const luaL_Reg lltestlib[] = {
 
 int luaopen_ll(lua_State* L, int testing_funcs)
 {
-    luaL_register(L, LUA_LLLIBNAME, lllib);
-    if (testing_funcs)
+    if (LUAU_IS_LSL_VM(L))
     {
-        // Pepper in some extra functions if we're testing
-        luaL_register_noclobber(L, LUA_LLLIBNAME, lltestlib);
+        luaL_register(L, LUA_LLLIBNAME, lllib);
+        // pepper in the functions that have "compat" modes, with compat mode on
+        luaL_register_noclobber_compat(L, LUA_LLLIBNAME, llcompateligiblelib, true);
         lua_pop(L, 1);
+        if (testing_funcs)
+        {
+            // Pepper in some extra functions if we're testing
+            luaL_register_noclobber(L, LUA_LLLIBNAME, lltestlib);
+            lua_pop(L, 1);
+        }
+    }
+    else
+    {
+        luaL_register(L, LUA_LLLIBNAME, lllib);
+        // pepper in the functions that have "compat" modes, with compat mode off
+        luaL_register_noclobber_compat(L, LUA_LLLIBNAME, llcompateligiblelib, false);
+        lua_pop(L, 1);
+        // llcompat is basically ll, but with all compat mode functions
+        luaL_register(L, LUA_LLCOMPATLIBNAME, lllib);
+        lua_pop(L, 1);
+        luaL_register_noclobber_compat(L, LUA_LLCOMPATLIBNAME, llcompateligiblelib, true);
+        lua_pop(L, 1);
+        if (testing_funcs)
+        {
+            // Pepper in some extra functions if we're testing
+            luaL_register_noclobber(L, LUA_LLLIBNAME, lltestlib);
+            lua_pop(L, 1);
+            luaL_register_noclobber(L, LUA_LLCOMPATLIBNAME, lltestlib);
+            lua_pop(L, 1);
+        }
     }
     return 1;
 }

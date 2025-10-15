@@ -558,6 +558,11 @@ TEST_CASE("llbase64")
     runConformance("llbase64.lua");
 }
 
+TEST_CASE("llcompat")
+{
+    runConformance("llcompat.lua");
+}
+
 TEST_CASE("SL Ares")
 {
     runConformance("sl_ares.lua");

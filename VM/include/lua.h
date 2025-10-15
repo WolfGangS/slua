@@ -32,13 +32,8 @@ typedef bool (*lua_eventHandlerRegistrationCallback)(lua_State *L, const char *e
 typedef struct lua_SLRuntimeState
 {
     unsigned int slIdentifier = LUA_LSL_IDENTIFIER;
-    int quatMT = -1;
-    int vecMT = -1;
-    int uuidMT = -1;
     int uuidWeakTab = -1;
     int uuidCompressedWeakTab = -1;
-    int detectedEventMT = -1;
-    int eventHandlerMT = -1;
     lua_mayCallHandleEventCallback mayCallHandleEventCb = nullptr;
     lua_eventHandlerRegistrationCallback eventHandlerRegistrationCb = nullptr;
 } lua_SLRuntimeState;
