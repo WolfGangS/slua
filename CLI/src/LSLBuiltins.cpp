@@ -93,6 +93,10 @@ void luauSL_init_global_builtins(const char* builtins_file)
             exit(EXIT_FAILURE);
         }
 
+        // Nah, we don't want these defined.
+        if (name == "TRUE" || name == "FALSE")
+            continue;
+
         // Value is everything after the current stream position
         value = line.substr(iss.tellg());
         // Strip off any whitespace
