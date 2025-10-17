@@ -111,8 +111,9 @@ TString* luaS_bufstart(lua_State* L, size_t size)
 }
 
 // ServerLua: Split out here for clarity, for now.
-static TString* findstring(const lua_State * L, const char *data, unsigned int len, unsigned int hash)
+static TString* findstring(lua_State * L, const char *data, unsigned int len, unsigned int hash)
 {
+    auto *g = L->global;
     stringtable *tb = &L->global->strt;
     int bucket = lmod(hash, tb->size);
     // search if we already have this string in the hash table
@@ -124,6 +125,19 @@ static TString* findstring(const lua_State * L, const char *data, unsigned int l
             if (isdead(L->global, obj2gco(el)))
                 changewhite(obj2gco(el));
 
+            // Note that even if we already had a copy of this string lying around, we don't
+            // necessarily know that this _user context_ held that string before. Therefore,
+            // if we're able to avoid creating a string due to interning, we still need to
+            // pretend as if we did an allocation. This makes sure reported memory usage
+            // doesn't change due to other resident scripts in the same VM.
+            // Check if this string was created, it would have been created in a user memcat
+            if (LUAU_LIKELY(!!g->cb.beforeallocate) && L->activememcat > 1 && el->memcat > 1)
+            {
+                // See `lgctraverse.cpp` for reasoning behind this
+                const size_t str_size = 16 + el->len;
+                if (LUAU_LIKELY(g->GCthreshold != SIZE_MAX) && g->cb.beforeallocate(L, 0, str_size))
+                    luaD_throw(L, LUA_ERRMEM);
+            }
             return el;
         }
     }
