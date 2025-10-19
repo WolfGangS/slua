@@ -494,7 +494,7 @@ int llevents_handle_event_cont(lua_State *L, int status)
     // Continue with next handler
     handler_index++;
 
-    while (handler_index <= handlers_len)
+    for (; handler_index <= handlers_len; ++handler_index)
     {
         lua_rawgeti(L, HANDLERS_TABLE, handler_index);
         LUAU_ASSERT(lua_type(L, -1) == LUA_TFUNCTION);
@@ -513,8 +513,6 @@ int llevents_handle_event_cont(lua_State *L, int status)
         lua_call(L, nargs, 0);
         if (L->status != LUA_OK)
             return -1;
-
-        handler_index++;
     }
 
     // All handlers completed - mark DetectedEvent wrappers as invalid
@@ -526,7 +524,7 @@ int llevents_handle_event_cont(lua_State *L, int status)
         for (int i = 1; i <= num_wrappers; i++)
         {
             lua_rawgeti(L, ARG_START, i);
-            lua_DetectedEvent *detected_event = (lua_DetectedEvent *)lua_touserdatatagged(L, -1, UTAG_DETECTED_EVENT);
+            auto *detected_event = (lua_DetectedEvent *)lua_touserdatatagged(L, -1, UTAG_DETECTED_EVENT);
             if (detected_event)
             {
                 detected_event->valid = false;
@@ -545,6 +543,8 @@ static int llevents_handle_event_init(lua_State *L)
     if (!llevents)
         luaL_typeerror(L, 1, "LLEvents");
 
+    // No implicit conversion from number please.
+    luaL_checktype(L, 2, LUA_TSTRING);
     const char *event_name = luaL_checkstring(L, 2);
     int nargs = lua_gettop(L) - 2;
     bool is_multi = is_multi_event(event_name);
@@ -567,7 +567,7 @@ static int llevents_handle_event_init(lua_State *L)
         // Not allowed to call `handleEvent()`. This isn't for security reasons or anything,
         // it's mostly to prevent people from using this for their own home-cooked dispatch stuff
         // that we don't want to support in internal APIs.
-        luaL_errorL(L, "Not allowed to call LLEvents:handleEvent()");
+        luaL_errorL(L, "Not allowed to call LLEvents:_handleEvent()");
     }
 
     // Clone the handlers array so modifications during handling don't affect us
@@ -657,8 +657,9 @@ void luaSL_setup_llevents_metatable(lua_State *L)
     lua_pushcfunction(L, llevents_eventnames, "eventNames");
     lua_setfield(L, -2, "eventNames");
 
-    lua_pushcclosurek(L, llevents_handle_event_init, "handleEvent", 0, llevents_handle_event_cont);
-    lua_setfield(L, -2, "handleEvent");
+    // This isn't part of the public API, so it's _ prefixed.
+    lua_pushcclosurek(L, llevents_handle_event_init, "_handleEvent", 0, llevents_handle_event_cont);
+    lua_setfield(L, -2, "_handleEvent");
 
     // give it a proper name for `typeof()`
     lua_pushstring(L, "LLEvents");

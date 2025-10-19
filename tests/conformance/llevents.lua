@@ -23,7 +23,9 @@ assert(LLEvents:off("touch_start", once_handler))
 
 
 -- handleEvent with no handlers (should be no-op)
-LLEvents:handleEvent("listen", 0, "test", "key", "msg")
+-- Note that _handleEvent is NOT part of the public API and can't be
+-- called directly except in tests.
+LLEvents:_handleEvent("listen", 0, "test", "key", "msg")
 
 -- Basic non-multi event handling
 local listen_called = false
@@ -33,7 +35,7 @@ LLEvents:on("listen", function(channel, name, id, msg)
     listen_args = {channel, name, id, msg}
 end)
 
-LLEvents:handleEvent("listen", 0, "test", "key", "msg")
+LLEvents:_handleEvent("listen", 0, "test", "key", "msg")
 assert(listen_called)
 assert(listen_args[1] == 0)
 assert(listen_args[2] == "test")
@@ -46,7 +48,7 @@ LLEvents:on("listen", function() table.insert(call_order, 1) end)
 LLEvents:on("listen", function() table.insert(call_order, 2) end)
 LLEvents:on("listen", function() table.insert(call_order, 3) end)
 
-LLEvents:handleEvent("listen", 0, "test", "key", "msg")
+LLEvents:_handleEvent("listen", 0, "test", "key", "msg")
 assert(#call_order == 3)
 assert(call_order[1] == 1)
 assert(call_order[2] == 2)
@@ -73,7 +75,7 @@ LLEvents:on("touch_start", function(detected)
     assert(detected[1].valid)
 end)
 
-LLEvents:handleEvent("touch_start", 2)
+LLEvents:_handleEvent("touch_start", 2)
 assert(detected_table ~= nil)
 assert(#detected_table == 2)
 assert(typeof(detected_table[1]) == "DetectedEvent")
@@ -90,14 +92,14 @@ local once_test_handler = LLEvents:once("listen", function(...)
 end)
 
 assert(#LLEvents:listeners("listen") == 1)
-LLEvents:handleEvent("listen", 0, "test", "key", "msg")
+LLEvents:_handleEvent("listen", 0, "test", "key", "msg")
 assert(once_call_count == 1)
 assert(#LLEvents:listeners("listen") == 0)
 assert(#once_args == 4)
 assert(once_args[4] == "msg")
 
 -- Call again, should not increment
-LLEvents:handleEvent("listen", 0, "test", "key", "msg")
+LLEvents:_handleEvent("listen", 0, "test", "key", "msg")
 assert(once_call_count == 1)
 
 -- Try a `function LLEvents.event` style handler
@@ -107,7 +109,7 @@ function LLEvents.listen(chan, name, id, msg)
     assert(msg == "msg")
 end
 
-LLEvents:handleEvent("listen", 0, "test", "key", "msg")
+LLEvents:_handleEvent("listen", 0, "test", "key", "msg")
 assert(call_count == 1)
 
 unreg_all()
@@ -121,7 +123,7 @@ LLEvents:on("listen", function() table.insert(call_order, 3) end)
 -- Do this twice in a row so we can be sure errors don't hose the state somehow
 for i=1,2 do
     call_order = {}
-    local success, ret = pcall(function() LLEvents:handleEvent("listen", 0, "test", "key", "msg") end)
+    local success, ret = pcall(function() LLEvents:_handleEvent("listen", 0, "test", "key", "msg") end)
     assert(not success)
     assert(#call_order == 1)
 end
@@ -135,7 +137,7 @@ LLEvents:on("listen", function() table.insert(call_order, 1); breaker() end)
 LLEvents:once("listen", function() breaker(); table.insert(call_order, 2) end)
 LLEvents:on("listen", function() table.insert(call_order, 3); breaker(); table.insert(call_order, 4); end)
 
-LLEvents:handleEvent("listen", 0, "test", "key", "msg")
+LLEvents:_handleEvent("listen", 0, "test", "key", "msg")
 
 assert(lljson.encode(call_order) == "[1,2,3,4]")
 
@@ -150,7 +152,7 @@ LLEvents:on("listen", function() table.insert(call_order, 1); coroutine.yield(1)
 LLEvents:once("listen", function() coroutine.yield(2); table.insert(call_order, 2) end)
 LLEvents:on("listen", function() table.insert(call_order, 3); coroutine.yield(3); table.insert(call_order, 4); end)
 
-local handle_coro = coroutine.create(function() LLEvents:handleEvent("listen", 0, "test", "key", "msg") end)
+local handle_coro = coroutine.create(function() LLEvents:_handleEvent("listen", 0, "test", "key", "msg") end)
 
 while true do
     local co_status, yielded_val = coroutine.resume(handle_coro)
@@ -174,6 +176,26 @@ local function assert_errors(func, expected_str)
     assert(is_match)
 end
 
+call_order = {}
+
+-- This should still be called because it was in the handlers table
+-- at the point the event was triggered.
+local function second_handler()
+    table.insert(call_order, 2)
+end
+
+local function first_handler()
+    table.insert(call_order, 1)
+    -- This will only take effect for the _next_ event.
+    LLEvents:off('touch_start', second_handler)
+end
+
+LLEvents:on('touch_start', first_handler)
+LLEvents:on('touch_start', second_handler)
+LLEvents:_handleEvent('touch_start', 1)
+assert(lljson.encode(call_order) == "[1,2]")
+
+unreg_all()
 
 assert_errors(
     function() LLEvents:on("disallowed", function() return end) end,
@@ -186,9 +208,10 @@ assert_errors(
 
 -- Run this last, check that we can block handle event calls
 set_may_call_handle_event(false)
+LLEvents:on('listen', function() assert(false) end)
 assert_errors(
-    function() LLEvents:handleEvent("listen", 0, "test", "key", "msg") end,
-    "Not allowed to call LLEvents:handleEvent()"
+    function() LLEvents:_handleEvent("listen", 0, "test", "key", "msg") end,
+    "Not allowed to call LLEvents:_handleEvent()"
 )
 
 return 'OK'
