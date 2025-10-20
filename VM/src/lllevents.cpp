@@ -495,10 +495,10 @@ enum EventHandlerStack {
     // How many handlers are in the handlers table (cached for speed)
     HANDLERS_LEN = 3,
     HANDLERS_TABLE = 4,
-    // number of args after `ARG_START`
-    NARGS = 5,
     // The original (live) handlers table before cloning
-    ORIGINAL_HANDLERS_TABLE = 6,
+    ORIGINAL_HANDLERS_TABLE = 5,
+    // number of args after `ARG_START`
+    NARGS = 6,
     // multi-args start after this.
     ARG_START = 7
 };
@@ -623,15 +623,16 @@ static int llevents_handle_event_init(lua_State *L)
         luaL_errorL(L, "Not allowed to call LLEvents:_handleEvent()");
     }
 
+    int handlers_len = lua_objlen(L, -1);
+
+    // Empty array isn't valid, val should be nil if no handlers.
+    // If it's present and empty we've messed up badly.
+    LUAU_ASSERT(handlers_len > 0);
+
     // Clone the handlers array so modifications during handling don't affect us
     // Keep the original for checking if handlers were removed during iteration
     lua_clonetable(L, -1);
     lua_remove(L, -3);  // Remove listeners_tab
-    // Stack now has: [..., original_handlers, cloned_handlers]
-    int handlers_len = lua_objlen(L, -1);
-
-    // Empty array isn't valid, val should be nil if no handlers.
-    LUAU_ASSERT(handlers_len > 0);
 
     if (is_multi)
     {
@@ -666,11 +667,11 @@ static int llevents_handle_event_init(lua_State *L)
     // cloned handlers_table already on top
     lua_insert(L, HANDLERS_TABLE);
 
-    lua_pushinteger(L, nargs);
-    lua_insert(L, NARGS);
-
     // original handlers_table (for checking removed handlers)
     lua_insert(L, ORIGINAL_HANDLERS_TABLE);
+
+    lua_pushinteger(L, nargs);
+    lua_insert(L, NARGS);
 
     // Remove llevents and event_name which are now at ARG_START
     lua_remove(L, ARG_START);  // Remove llevents
