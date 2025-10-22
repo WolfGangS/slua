@@ -84,13 +84,11 @@ static int lsl_quaternion_ctor(lua_State *L)
 
 int luaSL_pushquaternion(lua_State *L, double x, double y, double z, double s)
 {
-    lua_checkstack(L, 5);
-    lua_pushcfunction(L, lsl_quaternion_ctor, "quaternion");
-    lua_pushnumber(L, x);
-    lua_pushnumber(L, y);
-    lua_pushnumber(L, z);
-    lua_pushnumber(L, s);
-    lua_call(L, 4, 1);
+    auto *quat = (float *)lua_newuserdatataggedwithmetatable(L, sizeof(float) * 4, UTAG_QUATERNION);
+    quat[0] = (float)x;
+    quat[1] = (float)y;
+    quat[2] = (float)z;
+    quat[3] = (float)s;
     return 1;
 }
 
