@@ -260,6 +260,9 @@ static StateRef runConformance(const char* name, int32_t (*yield)(lua_State* L) 
     luaSL_createeventmanager(L);
     lua_setglobal(L, "LLEvents");
 
+    luaSL_createtimermanager(L);
+    lua_setglobal(L, "LLTimers");
+
     std::string chunkname = "=" + std::string(name);
 
     Luau::BytecodeBuilder bcb;
@@ -598,6 +601,38 @@ TEST_CASE("LLEvents")
             return true;
         };
         sl_state->mayCallHandleEventCb = [](lua_State *L) { return may_call_handle_event; };
+    });
+}
+
+static double test_clock_time = 0.0;
+TEST_CASE("LLTimers")
+{
+    test_clock_time = 0.0;
+    runConformance("lltimers.lua", nullptr, [](lua_State *L) {
+        // Provide a setclock function to control time in tests
+        lua_pushcfunction(L, [](lua_State *L) {
+            test_clock_time = luaL_checknumber(L, 1);
+            return 0;
+        }, "setclock");
+        lua_setglobal(L, "setclock");
+
+        // Provide a getclock function to read time in tests
+        lua_pushcfunction(L, [](lua_State *L) {
+            lua_pushnumber(L, test_clock_time);
+            return 1;
+        }, "getclock");
+        lua_setglobal(L, "getclock");
+
+        auto sl_state = LUAU_GET_SL_VM_STATE(L);
+        // Set up clock callback to return our test time
+        sl_state->getClockCb = [](lua_State *L) {
+            return test_clock_time;
+        };
+        // Set up timer event callback (no-op for tests)
+        sl_state->setTimerEventCb = [](lua_State *L, double interval) {
+            // In real usage, this would schedule a timer event
+            // For tests, we manually call _tick()
+        };
     });
 }
 

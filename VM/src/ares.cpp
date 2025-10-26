@@ -1307,6 +1307,15 @@ static void p_userdata(Info *info) {                               /* ... udata 
         lua_pop(info->L, 1);                                     /* ... udata */
         break;
     }
+    case UTAG_LLTIMERS:
+    {
+        const auto *lltimers = (lua_LLTimers*)value;
+        lua_getref(info->L, lltimers->timers_tab_ref);
+                                                          /* ... udata timers */
+        persist(info);
+        lua_pop(info->L, 1);                                     /* ... udata */
+        break;
+    }
     default:
       eris_error(info, "Unknown userdata type %d", utag);
       break;
@@ -1396,6 +1405,33 @@ static void u_userdata(Info *info) {                                   /* ... */
           llevents->listeners_tab = listeners_tab;
 
           // Manually put the LLEvents in the references table at the correct reference index
+          lua_pushvalue(info->L, -1);             /* perms reftbl ... obj obj */
+          lua_rawseti(info->L, REFTIDX, reference);   /* perms reftbl ... obj */
+          break;
+      }
+      case UTAG_LLTIMERS:
+      {
+          // Because we have an inner, wrapped table reference we need to reserve
+          // the idx for the outer timer manager first, since we saw it first.
+          int reference = allocate_ref_idx(info);
+
+          unpersist(info);                                  /* ... timers_tab */
+          eris_checktype(info, -1, LUA_TTABLE);
+          // We need to add a ref to the table so it stays alive as long as LLTimers
+          int tab_ref = lua_ref(info->L, -1);
+          LuaTable *timers_tab = hvalue(luaA_toobject(info->L, -1));
+          lua_pop(info->L, 1);                                         /* ... */
+
+          auto *lltimers = (lua_LLTimers*)lua_newuserdatataggedwithmetatable(
+              info->L,
+              sizeof(lua_LLTimers),
+              UTAG_LLTIMERS
+          );
+                                                              /* ... lltimers */
+          lltimers->timers_tab_ref = tab_ref;
+          lltimers->timers_tab = timers_tab;
+
+          // Manually put the LLTimers in the references table at the correct reference index
           lua_pushvalue(info->L, -1);             /* perms reftbl ... obj obj */
           lua_rawseti(info->L, REFTIDX, reference);   /* perms reftbl ... obj */
           break;

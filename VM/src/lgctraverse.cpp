@@ -115,6 +115,9 @@ static void traverseudata(ReachableContext* ctx, Udata* u)
         case UTAG_LLEVENTS:
             enqueueobj(ctx, obj2gco(((lua_LLEvents*)&u->data)->listeners_tab));
             break;
+        case UTAG_LLTIMERS:
+            enqueueobj(ctx, obj2gco(((lua_LLTimers*)&u->data)->timers_tab));
+            break;
         case UTAG_UUID:
             enqueueobj(ctx, obj2gco(((lua_LSLUUID*)&u->data)->str));
             break;
@@ -337,6 +340,8 @@ static size_t calcgcosize(GCObject *obj)
         case UTAG_DETECTED_EVENT:
             return 6;
         case UTAG_LLEVENTS:
+            return 8;
+        case UTAG_LLTIMERS:
             return 8;
         default:
             return sizeudata(udata->len);

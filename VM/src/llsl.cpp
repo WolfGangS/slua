@@ -14,6 +14,7 @@
 #include "mono_floats.h"
 #include "Luau/Bytecode.h"
 #include "lllevents.h"
+#include "llltimers.h"
 
 // This module is ONLY to be loaded into LSL scripts running under Luau,
 // it is NOT for general use by Luau scripts. If you use it otherwise
@@ -1535,6 +1536,13 @@ int luaopen_sl(lua_State* L)
     //////
 
     luaSL_setup_llevents_metatable(L);
+    LUAU_ASSERT(lua_gettop(L) == top);
+
+    //////
+    /// LLTimers
+    //////
+
+    luaSL_setup_llltimers_metatable(L);
     LUAU_ASSERT(lua_gettop(L) == top);
 
     // return "integer" when we call type() on an int

@@ -420,6 +420,8 @@ target_sources(Luau.VM PRIVATE
     VM/src/miniy2038.h
     VM/src/lllevents.cpp
     VM/src/lllevents.h
+    VM/src/llltimers.cpp
+    VM/src/llltimers.h
 
     # ServerLua: CJson
     VM/src/cjson/dtoa_config.h

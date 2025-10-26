@@ -235,6 +235,7 @@ static int llevents_on(lua_State *L)
 
     const char *event_name = luaL_checkstring(L, 2);
     luaL_checktype(L, 3, LUA_TFUNCTION);
+    lua_settop(L, 3);
 
     // Get the listeners table
     lua_getref(L, llevents->listeners_tab_ref);
@@ -284,6 +285,8 @@ static int llevents_off(lua_State *L)
 
     const char *event_name = luaL_checkstring(L, 2);
     luaL_checktype(L, 3, LUA_TFUNCTION);
+    lua_settop(L, 3);
+
 
     // Get the listeners table
     lua_getref(L, llevents->listeners_tab_ref);
@@ -395,6 +398,7 @@ static int llevents_once(lua_State *L)
 
     luaL_checkstring(L, 2);
     luaL_checktype(L, 3, LUA_TFUNCTION);
+    lua_settop(L, 3);
 
     // Create wrapper function with upvalues
     lua_pushvalue(L, 1); // self
@@ -420,6 +424,7 @@ static int llevents_listeners(lua_State *L)
         luaL_typeerror(L, 1, "LLEvents");
 
     const char *event_name = luaL_checkstring(L, 2);
+    lua_settop(L, 2);
 
     // Get the listeners table
     lua_getref(L, llevents->listeners_tab_ref);
@@ -452,6 +457,8 @@ static int llevents_eventnames(lua_State *L)
     const lua_LLEvents *llevents = (const lua_LLEvents *)lua_touserdatatagged(L, 1, UTAG_LLEVENTS);
     if (!llevents)
         luaL_typeerror(L, 1, "LLEvents");
+
+    lua_settop(L, 1);
 
     // Get the listeners table
     lua_getref(L, llevents->listeners_tab_ref);
@@ -598,6 +605,7 @@ static int llevents_handle_event_init(lua_State *L)
 
     // No implicit conversion from number please.
     luaL_checktype(L, 2, LUA_TSTRING);
+
     const char *event_name = luaL_checkstring(L, 2);
     int nargs = lua_gettop(L) - 2;
     bool is_multi = is_multi_event(event_name);

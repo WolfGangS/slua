@@ -27,6 +27,7 @@ enum class YieldableStatus : uint8_t {
 #define UTAG_UUID 26
 #define UTAG_DETECTED_EVENT 28
 #define UTAG_LLEVENTS 29
+#define UTAG_LLTIMERS 30
 
 struct TString;
 
@@ -52,13 +53,21 @@ typedef struct lua_LLEvents {
     LuaTable * listeners_tab;
 } lua_LLEvents;
 
+typedef struct lua_LLTimers {
+    // to be used with lua_ref(), be sure to un-pin appropriately on destruction.
+    // should be a reference to an array of timer data tables
+    int timers_tab_ref;
+    // Having an actual pointer is valuable for quick traversal.
+    LuaTable * timers_tab;
+} lua_LLTimers;
+
 LUA_API int luaSL_pushuuidlstring(lua_State *L, const char *str, size_t len);
 LUA_API int luaSL_pushuuidstring(lua_State *L, const char *str);
 LUA_API int luaSL_pushuuidbytes(lua_State *L, const uint8_t *bytes);
 LUA_API int luaSL_pushquaternion(lua_State *L, double x, double y, double z, double s);
 LUA_API int luaSL_pushdetectedevent(lua_State *L, int index, bool valid, bool can_change_damage);
 LUA_API int luaSL_createeventmanager(lua_State *L);
-LUA_API int luaSL_handle_event(lua_State *L);
+LUA_API int luaSL_createtimermanager(lua_State *L);
 LUA_API const char *luaSL_checkuuid(lua_State *L, int num_arg, bool * compressed);
 LUA_API const float *luaSL_checkquaternion(lua_State *L, int num_arg);
 #define luaSL_pushfloat(L, d) lua_pushnumber((L), (float)(d))

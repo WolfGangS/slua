@@ -1,0 +1,158 @@
+-- Test suite for LLTimers API
+
+assert(typeof(LLTimers) == "LLTimers")
+
+-- Helper to increment clock with epsilon to avoid floating point precision issues
+local function incrementclock(delta)
+    setclock(getclock() + delta + 0.001)
+end
+
+-- Test basic on() functionality
+local on_count = 0
+local on_handler = LLTimers:on(0.1, function()
+    on_count += 1
+end)
+
+assert(typeof(on_handler) == "function")
+
+-- Simulate timer tick
+setclock(0.05) -- Not time yet
+LLTimers:_tick()
+assert(on_count == 0)
+
+incrementclock(0.05) -- Advance to past 0.1, should fire now
+LLTimers:_tick()
+assert(on_count == 1)
+
+incrementclock(0.1) -- Advance by interval, should fire again
+LLTimers:_tick()
+assert(on_count == 2)
+
+-- Clean up on() timer before testing once()
+LLTimers:off(on_handler)
+
+-- Test once() functionality
+local once_count = 0
+local once_handler = LLTimers:once(0.1, function()
+    once_count += 1
+end)
+
+incrementclock(0.1) -- Should fire the once handler
+LLTimers:_tick()
+assert(once_count == 1)
+
+incrementclock(0.1) -- Should NOT fire again
+LLTimers:_tick()
+assert(once_count == 1)
+
+-- Test off() functionality
+-- Create a new timer to test removal
+local new_on_handler = LLTimers:on(0.1, function()
+    on_count += 1
+end)
+
+local result = LLTimers:off(new_on_handler)
+assert(result == true)
+
+incrementclock(0.1) -- Should not increment on_count anymore
+LLTimers:_tick()
+assert(on_count == 2) -- Still 2 from before
+
+-- Test off() with non-existent handler
+local fake_handler = function() end
+result = LLTimers:off(fake_handler)
+assert(result == false)
+
+-- Test multiple timers
+local timer1_count = 0
+local timer2_count = 0
+
+setclock(0.5)
+local timer1 = LLTimers:on(0.1, function()
+    timer1_count += 1
+end)
+
+local timer2 = LLTimers:on(0.05, function()
+    timer2_count += 1
+end)
+
+setclock(0.551) -- timer2 fires (at 0.55), reschedules to 0.601
+LLTimers:_tick()
+assert(timer1_count == 0)
+assert(timer2_count == 1)
+
+setclock(0.60001) -- timer1 fires (at 0.6), timer2 doesn't yet (still at 0.601)
+LLTimers:_tick()
+assert(timer1_count == 1)
+assert(timer2_count == 1)
+
+setclock(0.651) -- timer2 fires (at 0.601), timer1 doesn't (at 0.70001)
+LLTimers:_tick()
+assert(timer1_count == 1)
+assert(timer2_count == 2)
+
+-- Clean up
+LLTimers:off(timer1)
+LLTimers:off(timer2)
+
+-- Test cancelling a once timer before it fires
+local cancelled_count = 0
+setclock(0.7)
+local cancel_handler = LLTimers:once(0.5, function()
+    cancelled_count += 1
+end)
+
+result = LLTimers:off(cancel_handler)
+assert(result == true)
+
+incrementclock(0.5) -- Should not fire
+LLTimers:_tick()
+assert(cancelled_count == 0)
+
+-- Test negative interval
+local success, err = pcall(function()
+    LLTimers:on(-1, function() end)
+end)
+assert(success == false)
+
+-- Test zero interval
+success, err = pcall(function()
+    LLTimers:on(0, function() end)
+end)
+assert(success == false)
+
+-- Test invalid handler type
+success, err = pcall(function()
+    LLTimers:on(1, "not a function")
+end)
+assert(success == false)
+
+-- Test tostring
+local str = tostring(LLTimers)
+assert(type(str) == "string")
+assert(string.find(str, "LLTimers"))
+
+-- Test that timers can be removed during tick
+local removal_test_count = 0
+local remover = nil
+setclock(1.2)
+remover = LLTimers:on(0.1, function()
+    removal_test_count += 1
+    if removal_test_count >= 2 then
+        LLTimers:off(remover)
+    end
+end)
+
+incrementclock(0.1)
+LLTimers:_tick()
+assert(removal_test_count == 1)
+
+incrementclock(0.1)
+LLTimers:_tick()
+assert(removal_test_count == 2)
+
+incrementclock(0.1)
+LLTimers:_tick()
+assert(removal_test_count == 2) -- Should not increment
+
+return "OK"
