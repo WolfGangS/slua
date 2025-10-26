@@ -211,6 +211,15 @@ typedef uint64_t ares_size_t;
  * a custom error message should you ever decide you want one. */
 #define eris_checkstack(L, n) luaL_checkstack(L, n, nullptr)
 
+/* Validates that unpersisted data has the expected type. Raises an error on mismatch. */
+#define eris_checktype(info, idx, expected_type) \
+  do { \
+    if (lua_type((info)->L, (idx)) != (expected_type)) { \
+      eris_error((info), "malformed data: expected %s, got %s", \
+                 kTypenames[(expected_type)], kTypenames[lua_type((info)->L, (idx))]); \
+    } \
+  } while(0)
+
 /* Used for internal consistency checks, for debugging. These are true asserts
  * in the sense that they should never fire, even for bad inputs. */
 #if !defined(NDEBUG) || defined(LUAU_ENABLE_ASSERT)
@@ -838,7 +847,7 @@ u_boolean(Info *info) {                                                /* ... */
   setbvalue(info->L->top, READ_VALUE(int32_t));                   /* ... bool */
   eris_incr_top(info->L);
 
-  eris_assert(lua_type(info->L, -1) == LUA_TBOOLEAN);
+  eris_checktype(info, -1, LUA_TBOOLEAN);
 }
 
 /** ======================================================================== */
@@ -856,7 +865,7 @@ u_pointer(Info *info) {                                                /* ... */
   void *ptr = (void*)READ_VALUE(ares_size_t);
   lua_pushlightuserdatatagged(info->L, ptr, tag);    /* ... ludata */
 
-  eris_assert(lua_type(info->L, -1) == LUA_TLIGHTUSERDATA);
+  eris_checktype(info, -1, LUA_TLIGHTUSERDATA);
 }
 
 /** ======================================================================== */
@@ -871,7 +880,7 @@ u_number(Info *info) {                                                 /* ... */
   eris_checkstack(info->L, 1);
   lua_pushnumber(info->L, READ_VALUE(lua_Number));                 /* ... num */
 
-  eris_assert(lua_type(info->L, -1) == LUA_TNUMBER);
+  eris_checktype(info, -1, LUA_TNUMBER);
 }
 
 /** ======================================================================== */
@@ -903,7 +912,7 @@ u_vector(Info *info) {                                                 /* ... */
   lua_pushvector(info->L, v[0], v[1], v[2]);                       /* ... vec */
 #endif
 
-  eris_assert(lua_type(info->L, -1) == LUA_TVECTOR);
+  eris_checktype(info, -1, LUA_TVECTOR);
 }
 
 
@@ -930,7 +939,7 @@ u_string(Info *info) {                                                 /* ... */
   }
   registerobject(info);
 
-  eris_assert(lua_type(info->L, -1) == LUA_TSTRING);
+  eris_checktype(info, -1, LUA_TSTRING);
 }
 
 
@@ -956,7 +965,7 @@ u_buffer(Info *info) {                                                /* ... */
   }
   registerobject(info);
 
-  eris_assert(lua_type(info->L, -1) == LUA_TBUFFER);
+  eris_checktype(info, -1, LUA_TBUFFER);
 }
 
 /*
@@ -1235,7 +1244,7 @@ static void u_table(Info *info) {                                      /* ... */
       luaA_pushobject(info->L, &key_val);              /* ... tbl pos_tbl key */
       lua_rawget(info->L, -2);                         /* ... tbl pos_tbl val */
       // if the lookup failed then something is seriously wrong.
-      eris_assert(lua_type(info->L, -1) == LUA_TNUMBER);
+      eris_checktype(info, -1, LUA_TNUMBER);
 
       int iteridx = lua_tointeger(info->L, -1);
       lua_pop(info->L, 1);                                 /* ... tbl pos_tbl */
@@ -1338,7 +1347,7 @@ static void u_userdata(Info *info) {                                   /* ... */
 
         // Deserialize the wrapped string
         unpersist(info);                                           /* ... str */
-        eris_assert(lua_type(info->L, -1) == LUA_TSTRING);
+        eris_checktype(info, -1, LUA_TSTRING);
         size_t len;
         auto *str_val = luaL_checklstring(info->L, -1, &len);
         luaSL_pushuuidlstring(info->L, str_val, len);         /* ... str uuid */
@@ -1371,7 +1380,7 @@ static void u_userdata(Info *info) {                                   /* ... */
           int reference = allocate_ref_idx(info);
 
           unpersist(info);                                /* ... handlers_tab */
-          eris_assert(lua_type(info->L, -1) == LUA_TTABLE);
+          eris_checktype(info, -1, LUA_TTABLE);
           // We need to add a ref to the table so it stays alive as long as LLEvents
           int tab_ref = lua_ref(info->L, -1);
           LuaTable *listeners_tab = hvalue(luaA_toobject(info->L, -1));
@@ -1392,13 +1401,13 @@ static void u_userdata(Info *info) {                                   /* ... */
           break;
       }
       default:
-        eris_assert(!"Unknown userdata tag");
+        eris_error(info, "Unknown userdata tag %d", utag);
         break;
     }
   }
   u_metatable(info);
   eris_assert(top + 1 == lua_gettop(info->L));
-  eris_assert(lua_type(info->L, -1) == LUA_TUSERDATA);
+  eris_checktype(info, -1, LUA_TUSERDATA);
 }
 
 /*
@@ -1609,13 +1618,13 @@ u_proto(Info *info) {                                            /* ... proto */
   // TODO: line info
   /* Read line info if any is present. */
   if (READ_VALUE(uint8_t)) {
-    eris_assert(!"reading line info isn't supported");
+    eris_error(info, "reading line info isn't supported");
   }
 
   // TODO: debug info
   /* Read debug information if any is present. */
   if (READ_VALUE(uint8_t)) {
-    eris_assert(!"reading debug info isn't supported");
+    eris_error(info, "reading debug info isn't supported");
   }
 //
 //  /* Read debug information if any is present. */
@@ -1906,7 +1915,7 @@ u_closure(Info *info) {                                                /* ... */
     /* Push the proto into which to unpersist as a parameter to u_proto. */
     lua_pushlightuserdata(info->L, cl->l.p);                /* ... lcl nproto */
     unpersist(info);                          /* ... lcl nproto nproto/oproto */
-    eris_assert(lua_type(info->L, -1) == LUA_TLIGHTUSERDATA);
+    eris_checktype(info, -1, LUA_TLIGHTUSERDATA);
     /* The proto we have now may differ, if we already unpersisted it before.
      * In that case we now have a reference to the originally unpersisted
      * proto so we'll use that. */
@@ -1916,8 +1925,12 @@ u_closure(Info *info) {                                                /* ... */
       cl->l.p = p;
     }
     lua_pop(info->L, 2);                                           /* ... lcl */
-    eris_assert(cl->l.p->code != nullptr);
-    eris_assert(cl->l.p->nups == nups);
+    if (cl->l.p->code == nullptr) {
+      eris_error(info, "malformed data: proto has no code");
+    }
+    if (cl->l.p->nups != nups) {
+      eris_error(info, "malformed data: proto upvalue count mismatch");
+    }
     cl->stacksize = p->maxstacksize;
 
     /* Check if any of the inner protos originally had native code */
@@ -1938,7 +1951,7 @@ u_closure(Info *info) {                                                /* ... */
 
       // upval will be unpersisted as a table describing the upval
       unpersist(info);                                         /* ... lcl tbl */
-      eris_assert(lua_type(info->L, -1) == LUA_TTABLE);
+      eris_checktype(info, -1, LUA_TTABLE);
       lua_rawgeti(info->L, -1, UVTOCL);               /* ... lcl tbl olcl/nil */
       if (lua_isnil(info->L, -1)) {                        /* ... lcl tbl nil */
         // Don't have an existing closure to pull this upval from, create an upval.
@@ -1953,18 +1966,20 @@ u_closure(Info *info) {                                                /* ... */
         // This upval was already referenced in another closure, pull it off.
         Closure *ocl;
         int onup;
-        eris_assert(lua_type(info->L, -1) == LUA_TFUNCTION);
+        eris_checktype(info, -1, LUA_TFUNCTION);
         ocl = clvalue(info->L->top - 1);
         lua_pop(info->L, 1);                                   /* ... lcl tbl */
         lua_rawgeti(info->L, -1, UVTONU);                 /* ... lcl tbl onup */
-        eris_assert(lua_type(info->L, -1) == LUA_TNUMBER);
+        eris_checktype(info, -1, LUA_TNUMBER);
         onup = lua_tointeger(info->L, -1);
         lua_pop(info->L, 1);                                   /* ... lcl tbl */
         // _not_ setupvalue(), we want the tvalue pointers to be the same!
         setobj(info->L, upval_cont, &ocl->l.uprefs[onup - 1]);
       }
 
-      eris_assert(ttype(upval_cont) == LUA_TUPVAL);
+      if (ttype(upval_cont) != LUA_TUPVAL) {
+        eris_error(info, "malformed data: expected upvalue, got %s", kTypenames[ttype(upval_cont)]);
+      }
       UpVal *uv = &upval_cont->value.gc->uv;
       luaC_objbarrier(info->L, cl, uv);
 
@@ -2027,7 +2042,7 @@ u_closure(Info *info) {                                                /* ... */
     }
   }
 
-  eris_assert(lua_type(info->L, -1) == LUA_TFUNCTION);
+  eris_checktype(info, -1, LUA_TFUNCTION);
 }
 
 /** ======================================================================== */
@@ -2353,20 +2368,26 @@ u_thread(Info *info) {                                                 /* ... */
       }
     } else if (ci_kind == ERIS_CI_KIND_C) {
       // ci->func is a StkIdx, so loading the stack should have loaded this.
-      eris_assert(ttisfunction(thread->ci->func));
+      if (!ttisfunction(thread->ci->func)) {
+        eris_error(info, "malformed data: expected function in call info");
+      }
 
       // This function _should_ already be on the stack, let's make sure.
       LOCK(thread);
       unpersist(info);                                  /* ... thread func? */
       UNLOCK(thread);
-      eris_assert(lua_type(info->L, -1) == LUA_TFUNCTION);
+      eris_checktype(info, -1, LUA_TFUNCTION);
 
-      eris_ifassert(Closure *func_cl = clvalue(thread->ci->func));
-      eris_assert(clvalue(luaA_toobject(info->L, -1))->c.f == func_cl->c.f);
+      Closure *func_cl = clvalue(thread->ci->func);
+      if (clvalue(luaA_toobject(info->L, -1))->c.f != func_cl->c.f) {
+        eris_error(info, "malformed data: call info function mismatch");
+      }
       // We don't actually use the function for anything, just checking!
       lua_pop(info->L, 1);                                    /* ... thread */
     } else {
-      eris_assert(ci_kind == ERIS_CI_KIND_NONE);
+      if (ci_kind != ERIS_CI_KIND_NONE) {
+        eris_error(info, "malformed data: invalid call info kind");
+      }
     }
     LOCK(thread);
     poppath(info);
@@ -2414,7 +2435,7 @@ u_thread(Info *info) {                                                 /* ... */
     LOCK(thread);
     unpersist(info);                                        /* ... thread tbl */
     UNLOCK(thread);
-    eris_assert(lua_type(info->L, -1) == LUA_TTABLE);
+    eris_checktype(info, -1, LUA_TTABLE);
 
     /* Create the open upvalue either way. */
     LOCK(thread);
@@ -2425,7 +2446,7 @@ u_thread(Info *info) {                                                 /* ... */
     lua_rawgeti(info->L, -1, UVTREF);               /* ... thread tbl lcl/nil */
     if (!lua_isnil(info->L, -1)) {                      /* ... thread tbl lcl */
       int i, n;
-      eris_assert(lua_type(info->L, -1) == LUA_TFUNCTION);
+      eris_checktype(info, -1, LUA_TFUNCTION);
       /* Already exists, replace it. To do this we have to patch all the
        * references to the already existing one, which we added to the table in
        * u_closure. */
@@ -2445,7 +2466,6 @@ u_thread(Info *info) {                                                 /* ... */
       }
     }
     else {                                              /* ... thread tbl nil */
-      eris_assert(lua_isnil(info->L, -1));
       lua_pop(info->L, 1);                                  /* ... thread tbl */
     }
 
@@ -2459,7 +2479,7 @@ u_thread(Info *info) {                                                 /* ... */
 
   luaC_threadbarrier(thread);
 
-  eris_assert(lua_type(info->L, -1) == LUA_TTHREAD);
+  eris_checktype(info, -1, LUA_TTHREAD);
 }
 
 #undef UNLOCK
