@@ -1014,7 +1014,11 @@ static int lsl_eq_quat(lua_State *L)
 
     if (auto* b = (const float *)lua_touserdatatagged(L, 2, UTAG_QUATERNION))
     {
-        lua_pushboolean(L, memcmp(a, b, sizeof(float) * 4) == 0);
+        // Just a bare memcpy() would not be correct here because it would consider -0.0
+        // unequal to 0.0, and NaNs would be equal.
+        // At least I think. Need to double-check NaN semantics in Mono when in Vector
+        // or Quaternion
+        lua_pushboolean(L, a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3]);
     }
     else
     {

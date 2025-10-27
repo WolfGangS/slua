@@ -32,6 +32,8 @@ assert(toquaternion("<1,2,3,4>c") == nil)
 assert(typeof(quaternion(0, 0, 0, 1)) == "quaternion")
 assert(tovector("", "nonsense") == nil)
 assert(toquaternion("", "nonsense") == nil)
+local nan_quat = quaternion(0, 0, 0, tonumber('nan'))
+assert(nan_quat ~= nan_quat)
 
 assert(not (uuid("00000000-0000-0000-0000-000000000001") == uuid("00000000-0000-0000-0000-000000000002")))
 assert(uuid("00000000-0000-0000-0000-000000000001") ~= uuid("00000000-0000-0000-0000-000000000002"))
