@@ -183,7 +183,7 @@ static int memoryLimitCallback(lua_State *L, size_t osize, size_t nsize)
     return 0;
 }
 
-static StateRef runConformance(const char* name, int32_t (*yield)(lua_State* L) = nullptr, void (*setup)(lua_State* L) = nullptr,
+static StateRef runConformance(const char* name, void (*yield)(lua_State* L) = nullptr, void (*setup)(lua_State* L) = nullptr,
     lua_State* initialLuaState = nullptr, lua_CompileOptions* options = nullptr)
 {
     std::string path = getSourceFilePath(name);
@@ -290,7 +290,11 @@ static StateRef runConformance(const char* name, int32_t (*yield)(lua_State* L) 
     do
     {
         status = lua_resume(L, nullptr, 0);
-    } while(status == LUA_BREAK);
+        if (yield && status == LUA_YIELD)
+        {
+            yield(L);
+        }
+    } while(status == LUA_BREAK || (yield && status == LUA_YIELD));
 
     checkStatus(L, status);
 
@@ -609,6 +613,9 @@ TEST_CASE("LLTimers")
 {
     test_clock_time = 0.0;
     runConformance("lltimers.lua", nullptr, [](lua_State *L) {
+        lua_pushcfunction(L, lua_break, "breaker");
+        lua_setglobal(L, "breaker");
+
         // Provide a setclock function to control time in tests
         lua_pushcfunction(L, [](lua_State *L) {
             test_clock_time = luaL_checknumber(L, 1);
@@ -634,6 +641,56 @@ TEST_CASE("LLTimers")
             // For tests, we manually call _tick()
         };
     });
+}
+
+TEST_CASE("LLEvents and LLTimers interrupt between handlers")
+{
+    static int yield_count = 0;
+    static double test_time = 0.0;
+    yield_count = 0;
+    test_time = 0.0;
+
+    runConformance(
+        "llevents_interrupt.lua",
+        // yield handler
+        [](lua_State *L) {
+            yield_count++;
+        },
+        // setup handler
+        [](lua_State *L) {
+            // runConformance already created LLEvents and LLTimers, just configure them
+            auto sl_state = LUAU_GET_SL_VM_STATE(L);
+            sl_state->eventHandlerRegistrationCb = [](lua_State *L, const char *event_name, bool enabled) {
+                return true; // Allow all events for this test
+            };
+            sl_state->mayCallHandleEventCb = [](lua_State *L) {
+                return true; // Allow calling handleEvent
+            };
+            sl_state->getClockCb = [](lua_State *L) {
+                return test_time;
+            };
+            sl_state->setTimerEventCb = [](lua_State *L, double interval) {
+                // No-op for test
+            };
+
+            lua_pushcfunction(L, [](lua_State *L) {
+                test_time = luaL_checknumber(L, 1);
+                return 0;
+            }, "setclock");
+            lua_setglobal(L, "setclock");
+
+            // Set up interrupt callback that forces yields on handler interrupts only
+            // This serves as a check that we're _always_ allowed to interrupt between
+            // handlers, even if we can't interrupt within the handlers themselves.
+            lua_callbacks(L)->interrupt = [](lua_State *L, int gc) {
+                if (gc != -2)
+                    return;  // Only yield for handler interrupt checks
+                lua_yield(L, 0);
+            };
+        });
+
+    // Should have 3 event handlers + 3 timer handlers = 6 yields total
+    CHECK_EQ(yield_count, 6);
 }
 
 TEST_CASE("Table Clone OoM")

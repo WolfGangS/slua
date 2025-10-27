@@ -155,4 +155,75 @@ incrementclock(0.1)
 LLTimers:_tick()
 assert(removal_test_count == 2) -- Should not increment
 
+-- Test that timers can handle internal `lua_break()`s due to the scheduler
+local breaker_call_order = {}
+setclock(2.0)
+
+local breaker_timer1 = LLTimers:on(0.01, function()
+    table.insert(breaker_call_order, 1)
+    breaker()
+end)
+
+-- This should work with :once() too :)
+local breaker_timer2 = LLTimers:once(0.01, function()
+    breaker()
+    table.insert(breaker_call_order, 2)
+end)
+
+local breaker_timer3 = LLTimers:on(0.01, function()
+    table.insert(breaker_call_order, 3)
+    breaker()
+    table.insert(breaker_call_order, 4)
+end)
+
+setclock(2.1) -- All timers should fire
+LLTimers:_tick()
+
+assert(lljson.encode(breaker_call_order) == "[1,2,3,4]")
+
+-- Clean up
+LLTimers:off(breaker_timer1)
+LLTimers:off(breaker_timer3)
+
+-- Test that timers can handle coroutine yields
+breaker_call_order = {}
+local yield_order = {}
+setclock(3.0)
+
+local yield_timer1 = LLTimers:on(0.01, function()
+    table.insert(breaker_call_order, 1)
+    coroutine.yield(1)
+end)
+
+-- This should work with :once() too :)
+local yield_timer2 = LLTimers:once(0.01, function()
+    coroutine.yield(2)
+    table.insert(breaker_call_order, 2)
+end)
+
+local yield_timer3 = LLTimers:on(0.01, function()
+    table.insert(breaker_call_order, 3)
+    coroutine.yield(3)
+    table.insert(breaker_call_order, 4)
+end)
+
+setclock(3.1) -- All timers should fire
+
+local tick_coro = coroutine.create(function() LLTimers:_tick() end)
+
+while true do
+    local co_status, yielded_val = coroutine.resume(tick_coro)
+    if not co_status then
+        break
+    end
+    table.insert(yield_order, yielded_val)
+end
+
+assert(lljson.encode(breaker_call_order) == "[1,2,3,4]")
+assert(lljson.encode(yield_order) == "[1,2,3]")
+
+-- Clean up
+LLTimers:off(yield_timer1)
+LLTimers:off(yield_timer3)
+
 return "OK"

@@ -527,6 +527,8 @@ int llevents_handle_event_cont(lua_State *L, int status)
     // Continue with next handler
     handler_index++;
 
+    void (*interrupt)(lua_State*, int) = L->global->cb.interrupt;
+
     for (; handler_index <= handlers_len; ++handler_index)
     {
         lua_rawgeti(L, HANDLERS_TABLE, handler_index);
@@ -573,6 +575,14 @@ int llevents_handle_event_cont(lua_State *L, int status)
         lua_call(L, nargs, 0);
         if (L->status != LUA_OK)
             return -1;
+
+        // Check for interrupts between handlers to prevent abuse
+        if (LUAU_LIKELY(!!interrupt))
+        {
+            interrupt(L, -2);  // -2 indicates "handler interrupt check"
+            if (L->status != LUA_OK)
+                return -1;
+        }
     }
 
     // All handlers completed - mark DetectedEvent wrappers as invalid

@@ -277,6 +277,11 @@ static int lltimers_tick_cont(lua_State *L, int status)
     LUAU_ASSERT(timer_index >= 1);
     LUAU_ASSERT(timers_len >= 0);
 
+    // Allocate stack space for loop iterations (needed after resume from yield)
+    lua_checkstack(L, 10);
+
+    void (*interrupt)(lua_State*, int) = L->global->cb.interrupt;
+
     while (timer_index <= timers_len)
     {
         lua_rawgeti(L, CLONED_TIMERS_ARRAY, timer_index); // Get timer from cloned array
@@ -393,14 +398,22 @@ static int lltimers_tick_cont(lua_State *L, int status)
         lua_pushvalue(L, HANDLER_FUNC);
         lua_call(L, 0, 0);
 
+        if (L->status == LUA_YIELD || L->status == LUA_BREAK)
+        {
+            return -1;
+        }
+
         // We can nil this out, we don't need a reference anymore.
         lua_pushnil(L);
         lua_replace(L, CURRENT_TIMER);
         LUAU_ASSERT(lua_gettop(L) == HANDLER_FUNC);
 
-        if (L->status == LUA_YIELD || L->status == LUA_BREAK)
+        // Check for interrupts between timers to prevent abuse
+        if (LUAU_LIKELY(!!interrupt))
         {
-            return -1;
+            interrupt(L, -2);  // -2 indicates "handler interrupt check"
+            if (L->status != LUA_OK)
+                return -1;
         }
 
         timer_index++;
