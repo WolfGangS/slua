@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include "miniy2038.h"
+#include "lapi.h"
 
 #define LUA_STRFTIMEOPTIONS "aAbBcdHIjmMpSUwWxXyYzZ%"
 
@@ -60,6 +61,17 @@ static lua_time_t os_timegm(struct tm* timep)
 
 static int os_clock(lua_State* L)
 {
+    // ServerLua: We have an internal timer that is serialized with the script state,
+    // we want to use that instead for user-facing things.
+    if (LUAU_IS_SL_VM(L))
+    {
+        auto *runtime_state = LUAU_GET_SL_VM_STATE(L);
+        if (auto *clock_provider = runtime_state->clockProvider)
+        {
+            lua_pushnumber(L, clock_provider(L));
+            return 1;
+        }
+    }
     lua_pushnumber(L, lua_clock());
     return 1;
 }

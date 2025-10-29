@@ -20,6 +20,9 @@ setclock(0.05) -- Not time yet
 LLTimers:_tick()
 assert(on_count == 0)
 
+-- This should be using our fake clock
+assert(os.clock() - 0.05 < 0.000001)
+
 incrementclock(0.05) -- Advance to past 0.1, should fire now
 LLTimers:_tick()
 assert(on_count == 1)
