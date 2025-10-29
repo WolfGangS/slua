@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <cmath>
+#include <algorithm>
 #include "lua.h"
 #include "lcommon.h"
 #include "lualib.h"
@@ -19,6 +20,11 @@ enum TimerDataIndex {
     TIMER_NEXT_RUN = 3,
     TIMER_LEN = TIMER_NEXT_RUN,
 };
+
+static inline uint64_t seconds_to_micros(double seconds)
+{
+    return (uint64_t)(seconds * 1000000.0);
+}
 
 static void lltimers_dtor(lua_State *L, void *data)
 {
@@ -59,8 +65,10 @@ static int lltimers_on(lua_State *L)
     if (seconds <= 0.0)
         luaL_errorL(L, "timer interval must be positive");
 
+    uint64_t interval_us = seconds_to_micros(seconds);
+
     // Get current time
-    double current_time = sl_state->getClockCb ? sl_state->getClockCb(L) : 0.0;
+    uint64_t current_time_us = sl_state->clockProvider ? sl_state->clockProvider(L) : 0;
 
     // Get the timers array
     lua_getref(L, lltimers->timers_tab_ref);
@@ -69,9 +77,9 @@ static int lltimers_on(lua_State *L)
     lua_createtable(L, 3, 0);
     lua_pushvalue(L, 3);
     lua_rawseti(L, -2, TIMER_HANDLER);
-    lua_pushnumber(L, current_time + seconds);
+    lua_pushnumber(L, (double)(current_time_us + interval_us));
     lua_rawseti(L, -2, TIMER_NEXT_RUN);
-    lua_pushnumber(L, seconds);
+    lua_pushnumber(L, (double)interval_us);
     lua_rawseti(L, -2, TIMER_INTERVAL);
 
     LUAU_ASSERT(lua_objlen(L, -1) == TIMER_LEN);
@@ -101,8 +109,10 @@ static int lltimers_once(lua_State *L)
     if (seconds <= 0.0)
         luaL_errorL(L, "timer interval must be positive");
 
+    uint64_t interval_us = seconds_to_micros(seconds);
+
     // Get current time
-    double current_time = sl_state->getClockCb ? sl_state->getClockCb(L) : 0.0;
+    uint64_t current_time_us = sl_state->clockProvider ? sl_state->clockProvider(L) : 0;
 
     // Get the timers array
     lua_getref(L, lltimers->timers_tab_ref);
@@ -113,7 +123,7 @@ static int lltimers_once(lua_State *L)
     lua_rawseti(L, -2, TIMER_HANDLER);
     lua_pushnumber(L, -1);
     lua_rawseti(L, -2, TIMER_INTERVAL);
-    lua_pushnumber(L, current_time + seconds);
+    lua_pushnumber(L, (double)(current_time_us + interval_us));
     lua_rawseti(L, -2, TIMER_NEXT_RUN);
     LUAU_ASSERT(lua_objlen(L, -1) == TIMER_LEN);
 
@@ -200,27 +210,27 @@ static void schedule_next_tick(lua_State *L)
     if (len == 0)
     {
         // No timers pending, unsubscribe from the parent timer event
-        sl_state->setTimerEventCb(L, 0.0);
+        sl_state->setTimerEventCb(L, 0);
         return;
     }
 
     // Figure out when we next need to wake up
-    double min_time = HUGE_VAL;
+    uint64_t min_time_us = UINT64_MAX;
     for (int i = 1; i <= len; i++)
     {
         lua_rawgeti(L, LIVE_TIMERS_ARRAY, i);
         lua_rawgeti(L, -1, TIMER_NEXT_RUN);
-        double next_run = lua_tonumber(L, -1);
+        auto next_run_us = (uint64_t)lua_tonumber(L, -1);
         lua_pop(L, 2); // Pop nextRun and timer data
-        min_time = fmin(min_time, next_run);
+        min_time_us = std::min(min_time_us, next_run_us);
     }
 
     // Get current time
-    double current_time = sl_state->getClockCb ? sl_state->getClockCb(L) : 0.0;
+    uint64_t current_time_us = sl_state->clockProvider ? sl_state->clockProvider(L) : 0;
 
     // Timer events are relative, but our stored times are absolute
-    double next_interval = fmax(0.000001, min_time - current_time);
-    sl_state->setTimerEventCb(L, next_interval);
+    uint64_t next_interval_us = (min_time_us <= current_time_us) ? 1 : (min_time_us - current_time_us);
+    sl_state->setTimerEventCb(L, next_interval_us);
 }
 
 static int lltimers_tick_cont(lua_State *L, int status);
@@ -266,7 +276,7 @@ static int lltimers_tick_init(lua_State *L)
     return lltimers_tick_cont(L, LUA_OK);
 }
 
-static int lltimers_tick_cont(lua_State *L, int status)
+static int lltimers_tick_cont(lua_State *L, [[maybe_unused]]int status)
 {
     auto *sl_state = LUAU_GET_SL_VM_STATE(lua_mainthread(L));
 
@@ -320,20 +330,14 @@ static int lltimers_tick_cont(lua_State *L, int status)
 
         // Get the nextRun time from the timer
         lua_rawgeti(L, CURRENT_TIMER, TIMER_NEXT_RUN);
-        double next_run = lua_tonumber(L, -1);
+        auto next_run_us = (uint64_t)lua_tonumber(L, -1);
         lua_pop(L, 1);
 
-        // Verify nextRun is a reasonable number
-        LUAU_ASSERT(next_run >= 0.0);
-
         // Get current time (do this every loop because we might have yielded)
-        double start_time = sl_state->getClockCb ? sl_state->getClockCb(L) : 0.0;
-
-        // Verify start_time is reasonable
-        LUAU_ASSERT(start_time >= 0.0);
+        uint64_t start_time_us = sl_state->clockProvider ? sl_state->clockProvider(L) : 0;
 
         // Not time to run this yet, continue
-        if (next_run > start_time)
+        if (next_run_us > start_time_us)
         {
             // Timer was unscheduled, skip it
             // Pop the timer reference and nil out the timer and handler locals
@@ -349,12 +353,12 @@ static int lltimers_tick_cont(lua_State *L, int status)
         }
 
         // If we reach here, timer should fire
-        LUAU_ASSERT(next_run <= start_time);
+        LUAU_ASSERT(next_run_us <= start_time_us);
 
         // Check if this is a one-shot timer (interval is -1)
         lua_rawgeti(L, CURRENT_TIMER, TIMER_INTERVAL);
         bool is_one_shot = lua_tonumber(L, -1) == -1;
-        double interval = is_one_shot ? 0.0 : lua_tonumber(L, -1);
+        uint64_t interval_us = is_one_shot ? 0 : (uint64_t)lua_tonumber(L, -1);
         lua_pop(L, 1);
 
         if (is_one_shot)
@@ -376,7 +380,7 @@ static int lltimers_tick_cont(lua_State *L, int status)
         else
         {
             // Schedule its next run
-            lua_pushnumber(L, start_time + interval);
+            lua_pushnumber(L, (double)(start_time_us + interval_us));
             lua_rawseti(L, CURRENT_TIMER, TIMER_NEXT_RUN);
         }
 

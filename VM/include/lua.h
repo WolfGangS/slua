@@ -26,8 +26,10 @@ struct lua_State;
 
 typedef bool (*lua_mayCallHandleEventCallback)(lua_State *L);
 typedef bool (*lua_eventHandlerRegistrationCallback)(lua_State *L, const char *event_name, bool registered);
-typedef void (*lua_setTimerEventCallback)(lua_State *L, double interval);
-typedef double (*lua_getClockCallback)(lua_State *L);
+typedef void (*lua_setTimerEventCallback)(lua_State *L, uint64_t interval_us);
+// Clock provider should return monotonic stopwatch time in microseconds.
+// Non-monotonic clocks may cause timer delays proportional to backward jumps.
+typedef uint64_t (*lua_clockProvider)(lua_State *L);
 typedef uint32_t (*lua_randomProvider)(lua_State *L);
 
 // This is meant to be shared between instances of the same script and should
@@ -40,7 +42,8 @@ typedef struct lua_SLRuntimeState
     lua_mayCallHandleEventCallback mayCallHandleEventCb = nullptr;
     lua_eventHandlerRegistrationCallback eventHandlerRegistrationCb = nullptr;
     lua_setTimerEventCallback setTimerEventCb = nullptr;
-    lua_getClockCallback getClockCb = nullptr;
+    // stopwatch timer
+    lua_clockProvider clockProvider = nullptr;
     lua_randomProvider randomProvider = nullptr;
 } lua_SLRuntimeState;
 
