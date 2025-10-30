@@ -239,12 +239,17 @@ assert(lljson.encode(yield_order) == "[1,2,3]")
 LLTimers:off(yield_timer1)
 LLTimers:off(yield_timer3)
 
--- Run this last, check that we can block _tick() calls
-set_may_call_tick(false)
-LLTimers:on(0.1, function() assert(false) end)
+-- Test reentrancy detection
+setclock(0.0)
+local reentrant_handler = LLTimers:on(0.1, function()
+    -- This should error because we're already inside _tick()
+    LLTimers:_tick()
+end)
+
+setclock(1.0)
 assert_errors(
     function() LLTimers:_tick() end,
-    "Not allowed to call LLTimers:_tick()"
+    "Recursive call to LLTimers:_tick%(%) detected"
 )
 
 return "OK"

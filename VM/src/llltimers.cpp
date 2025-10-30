@@ -230,6 +230,30 @@ static void schedule_next_tick(lua_State *L)
 
 static int lltimers_tick_cont(lua_State *L, int status);
 
+// Check if we're already inside a _tick() call by walking the call stack
+static bool is_already_in_tick(lua_State *L)
+{
+    // Walk up the call stack looking for lltimers_tick_cont
+    // We start from L->ci - 1 because L->ci is the current (new) call to _tick
+    for (CallInfo* ci = L->ci - 1; ci > L->base_ci; ci--)
+    {
+        // Get the function from this call frame
+        if (!ttisfunction(ci->func))
+            continue;
+
+        Closure* cl = clvalue(ci->func);
+
+        // Check if this is a C function with our continuation
+        if (cl->isC && cl->c.cont == lltimers_tick_cont)
+        {
+            // Found _tick() higher in the call stack - we're reentrant!
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static int lltimers_tick_init(lua_State *L)
 {
     auto *lltimers = (lua_LLTimers *)lua_touserdatatagged(L, 1, UTAG_LLTIMERS);
@@ -238,10 +262,10 @@ static int lltimers_tick_init(lua_State *L)
 
     lua_settop(L, 1);
 
-    auto *sl_state = LUAU_GET_SL_VM_STATE(lua_mainthread(L));
-    if (sl_state->mayCallTickCb != nullptr && !sl_state->mayCallTickCb(L))
+    // Check for reentrancy
+    if (is_already_in_tick(L))
     {
-        luaL_errorL(L, "Not allowed to call LLTimers:_tick()");
+        luaL_errorL(L, "Recursive call to LLTimers:_tick() detected");
     }
 
     // This reserves all the stack slots we need for the continuation
