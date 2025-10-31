@@ -1401,68 +1401,64 @@ static void u_userdata(Info *info) {                                   /* ... */
       }
       case UTAG_LLEVENTS:
       {
-          // Because we have an inner, wrapped table reference we need to reserve
-          // the idx for the outer event handler first, since we saw it first.
-          int reference = allocate_ref_idx(info);
-
-          unpersist(info);                                /* ... handlers_tab */
-          eris_checktype(info, -1, LUA_TTABLE);
-          // We need to add a ref to the table so it stays alive as long as LLEvents
-          int tab_ref = lua_ref(info->L, -1);
-          LuaTable *listeners_tab = hvalue(luaA_toobject(info->L, -1));
-          lua_pop(info->L, 1);                                         /* ... */
-
+          // Create userdata with safe initial values FIRST to handle cycles
           auto *llevents = (lua_LLEvents*)lua_newuserdatataggedwithmetatable(
               info->L,
               sizeof(lua_LLEvents),
               UTAG_LLEVENTS
           );
                                                               /* ... llevents */
-          llevents->listeners_tab_ref = tab_ref;
-          llevents->listeners_tab = listeners_tab;
+          llevents->listeners_tab_ref = -1;
+          llevents->listeners_tab = nullptr;
 
-          // Manually put the LLEvents in the references table at the correct reference index
-          lua_pushvalue(info->L, -1);             /* perms reftbl ... obj obj */
-          lua_rawseti(info->L, REFTIDX, reference);   /* perms reftbl ... obj */
+          // Register immediately to handle cycles (listeners_tab may reference this)
+          registerobject(info);
+
+          // Unpersist listeners_tab and store ref IMMEDIATELY to prevent leaks
+          unpersist(info);                           /* ... llevents handlers_tab */
+          eris_checktype(info, -1, LUA_TTABLE);
+          llevents->listeners_tab_ref = lua_ref(info->L, -1);
+          llevents->listeners_tab = hvalue(luaA_toobject(info->L, -1));
+          lua_pop(info->L, 1);                                    /* ... llevents */
+
           break;
       }
       case UTAG_LLTIMERS:
       {
-          // Because we have an inner, wrapped table reference we need to reserve
-          // the idx for the outer timer manager first, since we saw it first.
-          int reference = allocate_ref_idx(info);
-
-          unpersist(info);                                  /* ... timers_tab */
-          eris_checktype(info, -1, LUA_TTABLE);
-          // We need to add a ref to the table so it stays alive as long as LLTimers
-          int tab_ref = lua_ref(info->L, -1);
-          LuaTable *timers_tab = hvalue(luaA_toobject(info->L, -1));
-          lua_pop(info->L, 1);                                         /* ... */
-
-          unpersist(info);                                   /* ... llevents */
-          eris_checkuserdatatag(info, -1, UTAG_LLEVENTS);
-          int llevents_ref = lua_ref(info->L, -1);
-          lua_pop(info->L, 1);                                         /* ... */
-
-          unpersist(info);                              /* ... timer_wrapper */
-          eris_checktype(info, -1, LUA_TFUNCTION);
-          int timer_wrapper_ref = lua_ref(info->L, -1);
-          lua_pop(info->L, 1);                                         /* ... */
-
+          // Create userdata with safe initial values FIRST to handle cycles
           auto *lltimers = (lua_LLTimers*)lua_newuserdatataggedwithmetatable(
               info->L,
               sizeof(lua_LLTimers),
               UTAG_LLTIMERS
           );
                                                               /* ... lltimers */
-          lltimers->timers_tab_ref = tab_ref;
-          lltimers->timers_tab = timers_tab;
-          lltimers->llevents_ref = llevents_ref;
-          lltimers->timer_wrapper_ref = timer_wrapper_ref;
+          lltimers->timers_tab_ref = -1;
+          lltimers->llevents_ref = -1;
+          lltimers->timer_wrapper_ref = -1;
+          lltimers->timers_tab = nullptr;
 
-          // Manually put the LLTimers in the references table at the correct reference index
-          lua_pushvalue(info->L, -1);             /* perms reftbl ... obj obj */
-          lua_rawseti(info->L, REFTIDX, reference);   /* perms reftbl ... obj */
+          // Register immediately to handle cycles (timer_wrapper has LLTimers as upvalue)
+          registerobject(info);
+
+          // Unpersist timers_tab and store ref IMMEDIATELY to prevent leaks
+          unpersist(info);                            /* ... lltimers timers_tab */
+          eris_checktype(info, -1, LUA_TTABLE);
+          lltimers->timers_tab_ref = lua_ref(info->L, -1);
+          lltimers->timers_tab = hvalue(luaA_toobject(info->L, -1));
+          lua_pop(info->L, 1);                                     /* ... lltimers */
+
+          // Unpersist llevents and store ref IMMEDIATELY
+          unpersist(info);                             /* ... lltimers llevents */
+          eris_checkuserdatatag(info, -1, UTAG_LLEVENTS);
+          lltimers->llevents_ref = lua_ref(info->L, -1);
+          lua_pop(info->L, 1);                                     /* ... lltimers */
+
+          // Unpersist timer_wrapper and store ref IMMEDIATELY
+          unpersist(info);                        /* ... lltimers timer_wrapper */
+          eris_checktype(info, -1, LUA_TFUNCTION);
+          lltimers->timer_wrapper_ref = lua_ref(info->L, -1);
+          lua_pop(info->L, 1);                                     /* ... lltimers */
+
           break;
       }
       default:

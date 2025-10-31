@@ -345,4 +345,24 @@ incrementclock(0.3)
 LLEvents:_handleEvent('timer')
 assert(callable_count == 2)
 
+-- make sure serialization still works
+setclock(0)
+-- error() is the poor man's long-return.
+local function throw_error() error("called!") end
+LLTimers:on(0.5, throw_error)
+
+-- In reality you wouldn't give users primitives to clone these, but just for testing!
+local timers_clone = ares.unpersist(ares.persist(LLTimers))
+setclock(0.6)
+
+assert_errors(function() timers_clone:_tick() end, "called!")
+assert_errors(function() LLTimers:_tick() end, "called!")
+
+incrementclock(0.6)
+
+LLTimers:off(throw_error)
+-- Only one of them now has the problematic handler
+LLTimers:_tick()
+assert_errors(function() timers_clone:_tick() end, "called!")
+
 return "OK"
