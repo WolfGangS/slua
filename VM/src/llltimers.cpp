@@ -82,7 +82,7 @@ int luaSL_createtimermanager(lua_State *L)
     lua_checkstack(L, 5);
 
     // Store LLEvents reference and remove from stack
-    int llevents_ref = lua_ref(L, 1);
+    int llevents_ref = lua_ref(L, -1);
     lua_pop(L, 1);
 
     auto *lltimers = (lua_LLTimers *)lua_newuserdatataggedwithmetatable(L, sizeof(lua_LLTimers), UTAG_LLTIMERS);
