@@ -27,6 +27,8 @@ assert(typeof(on_handler) == "function")
 
 -- Simulate timer tick
 setclock(0.05) -- Not time yet
+-- `ll.GetTime()` should be using the clock provider.
+assert((ll.GetTime() - 0.05) < 0.01)
 LLTimers:_tick()
 assert(on_count == 0)
 

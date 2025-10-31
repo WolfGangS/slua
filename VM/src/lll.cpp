@@ -760,6 +760,19 @@ static int ll_to_upper(lua_State *L)
     return 1;
 }
 
+static int ll_get_time(lua_State *L)
+{
+    auto *runtime_state = LUAU_GET_SL_VM_STATE(L);
+    double time = runtime_state->clockProvider ? runtime_state->clockProvider(L) : lua_clock();
+    if (runtime_state->slIdentifier == LUA_LSL_IDENTIFIER)
+    {
+        // Cast away all the precision and shove it back in a double if LSL :)
+        time = (float)time;
+    }
+    lua_pushnumber(L, time);
+    return 1;
+}
+
 static const luaL_Reg lllib[] = {
     {"Fabs", ll_fabs},
     {"Sin", ll_sin},
@@ -779,6 +792,7 @@ static const luaL_Reg lllib[] = {
     {"Abs", ll_abs},
     {"ToLower", ll_to_lower},
     {"ToUpper", ll_to_upper},
+    {"GetTime", ll_get_time},
     {NULL, NULL},
 };
 
