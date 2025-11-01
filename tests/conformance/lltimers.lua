@@ -18,6 +18,7 @@ local function assert_errors(func, expected_str)
 end
 
 -- Test basic on() functionality
+setclock(0.0)
 local on_count = 0
 local on_handler = LLTimers:on(0.1, function()
     on_count += 1
@@ -47,6 +48,7 @@ assert(on_count == 2)
 LLTimers:off(on_handler)
 
 -- Test once() functionality
+setclock(1.0)
 local once_count = 0
 local once_handler = LLTimers:once(0.1, function()
     once_count += 1
@@ -61,6 +63,7 @@ LLTimers:_tick()
 assert(once_count == 1)
 
 -- Test off() functionality
+setclock(2.0)
 -- Create a new timer to test removal
 local new_on_handler = LLTimers:on(0.1, function()
     on_count += 1
@@ -91,20 +94,20 @@ local timer2 = LLTimers:on(0.05, function()
     timer2_count += 1
 end)
 
-setclock(0.551) -- timer2 fires (at 0.55), reschedules to 0.601
+setclock(0.551) -- timer2 fires (at 0.55), reschedules to 0.60
 LLTimers:_tick()
 assert(timer1_count == 0)
 assert(timer2_count == 1)
 
-setclock(0.60001) -- timer1 fires (at 0.6), timer2 doesn't yet (still at 0.601)
-LLTimers:_tick()
-assert(timer1_count == 1)
-assert(timer2_count == 1)
-
-setclock(0.651) -- timer2 fires (at 0.601), timer1 doesn't (at 0.70001)
+setclock(0.60001) -- timer1 fires (at 0.6), timer2 also fires (at 0.60)
 LLTimers:_tick()
 assert(timer1_count == 1)
 assert(timer2_count == 2)
+
+setclock(0.651) -- timer2 fires again (at 0.65), timer1 doesn't (at 0.7)
+LLTimers:_tick()
+assert(timer1_count == 1)
+assert(timer2_count == 3)
 
 -- Clean up
 LLTimers:off(timer1)
@@ -395,5 +398,126 @@ assert(math.abs(get_last_interval() - 0.0) < 0.001)
 -- Oh also we should make sure that `:once()` behaves correctly.
 LLTimers:once(0.5, interval_timer1)
 assert(math.abs(get_last_interval() - 0.5) < 0.001)
+
+-- Test that scheduled time parameter is passed to timer handlers
+-- Basic parameter passing
+setclock(10.0)
+local received_scheduled_time = nil
+local test_handler = LLTimers:on(0.5, function(scheduled_time)
+    received_scheduled_time = scheduled_time
+end)
+
+setclock(10.6)  -- Fire at 10.5 + some slop
+LLEvents:_handleEvent('timer')
+assert(received_scheduled_time ~= nil, "Handler should receive scheduled_time parameter")
+assert(math.abs(received_scheduled_time - 10.5) < 0.001, "Scheduled time should be 10.5")
+LLTimers:off(test_handler)
+
+-- Verify it's scheduled time, not current time
+setclock(15.0)
+local scheduled_vs_current = {}
+local timing_handler = LLTimers:on(0.3, function(scheduled_time)
+    local current_time = getclock()
+    table.insert(scheduled_vs_current, {
+        scheduled = scheduled_time,
+        current = current_time,
+    })
+end)
+
+-- Intentionally call tick "late" to create a gap
+setclock(15.4)  -- Should have fired at 15.3
+LLEvents:_handleEvent('timer')
+
+assert(#scheduled_vs_current == 1)
+local timing = scheduled_vs_current[1]
+-- Scheduled time should be 15.3, current should be 15.4
+assert(math.abs(timing.scheduled - 15.3) < 0.001, "Scheduled should be 15.3")
+assert(math.abs(timing.current - 15.4) < 0.001, "Current should be 15.4")
+assert(timing.current > timing.scheduled, "Current time should be later than scheduled")
+
+LLTimers:off(timing_handler)
+
+-- Test diff calculation for delay detection
+setclock(20.0)
+local delays = {}
+local delay_handler = LLTimers:on(0.1, function(scheduled_time)
+    local current_time = getclock()
+    local delay = current_time - scheduled_time
+    table.insert(delays, delay)
+end)
+
+-- First call on time
+setclock(20.11)
+LLEvents:_handleEvent('timer')
+assert(#delays == 1)
+assert(delays[1] < 0.02, "First delay should be minimal")
+
+-- Second call late
+setclock(20.3)  -- Should have fired at 20.2, we're 0.1 late
+LLEvents:_handleEvent('timer')
+assert(#delays == 2)
+assert(delays[2] > 0.09, "Second delay should be ~0.1")
+assert(delays[2] < 0.11, "Second delay should be ~0.1")
+
+LLTimers:off(delay_handler)
+
+-- Test that once() timers also receive scheduled_time parameter
+setclock(25.0)
+local once_scheduled_time = nil
+local once_handler = LLTimers:once(0.7, function(scheduled_time)
+    once_scheduled_time = scheduled_time
+end)
+
+setclock(25.8)
+LLEvents:_handleEvent('timer')
+assert(once_scheduled_time ~= nil, "once() handler should receive parameter")
+assert(math.abs(once_scheduled_time - 25.7) < 0.001, "once() scheduled time should be 25.7")
+
+-- Test multiple timers receive correct individual scheduled times
+setclock(30.0)
+local timer_results = {}
+local handler1 = LLTimers:on(0.2, function(scheduled_time)
+    table.insert(timer_results, {id = 1, scheduled = scheduled_time})
+end)
+local handler2 = LLTimers:on(0.3, function(scheduled_time)
+    table.insert(timer_results, {id = 2, scheduled = scheduled_time})
+end)
+
+setclock(30.35)  -- Both should fire (at 30.2 and 30.3)
+LLEvents:_handleEvent('timer')
+
+assert(#timer_results == 2)
+-- Find which is which
+local result1 = timer_results[1].id == 1 and timer_results[1] or timer_results[2]
+local result2 = timer_results[1].id == 2 and timer_results[1] or timer_results[2]
+
+assert(math.abs(result1.scheduled - 30.2) < 0.001)
+assert(math.abs(result2.scheduled - 30.3) < 0.001)
+
+LLTimers:off(handler1)
+LLTimers:off(handler2)
+
+-- Test that on() timers get new scheduled_time for each invocation
+setclock(35.0)
+local repeat_scheduled_times = {}
+local repeat_handler = nil
+repeat_handler = LLTimers:on(0.5, function(scheduled_time)
+    table.insert(repeat_scheduled_times, scheduled_time)
+    if #repeat_scheduled_times >= 3 then
+        LLTimers:off(repeat_handler)
+    end
+end)
+
+setclock(35.6)
+LLEvents:_handleEvent('timer')  -- Should fire at 35.5
+setclock(36.1)
+LLEvents:_handleEvent('timer')  -- Should fire at 36.0
+setclock(36.6)
+LLEvents:_handleEvent('timer')  -- Should fire at 36.5
+
+assert(#repeat_scheduled_times == 3)
+assert(math.abs(repeat_scheduled_times[1] - 35.5) < 0.001)
+assert(math.abs(repeat_scheduled_times[2] - 36.0) < 0.001)
+assert(math.abs(repeat_scheduled_times[3] - 36.5) < 0.001)
 
 return "OK"

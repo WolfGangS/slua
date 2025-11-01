@@ -555,11 +555,14 @@ static int lltimers_tick_cont(lua_State *L, [[maybe_unused]]int status)
         }
         else
         {
-            // Schedule its next run
+            // Schedule its next run using absolute scheduling
+            // (next = previous_scheduled_time + interval)
+            // This prevents drift and ensures the timer maintains its rhythm
+            // regardless of execution delays.
             // Note that we do this BEFORE the timer is ever run.
             // This ensures that handler runtime has no effect on
-            // When the handler will be invoked next.
-            lua_pushnumber(L, start_time + interval);
+            // when the handler will be invoked next.
+            lua_pushnumber(L, next_run + interval);
             lua_rawseti(L, CURRENT_TIMER, TIMER_NEXT_RUN);
         }
 
@@ -579,7 +582,10 @@ static int lltimers_tick_cont(lua_State *L, [[maybe_unused]]int status)
 
         // No pcall(), errors bubble up to the global error handler!
         lua_pushvalue(L, HANDLER_FUNC);
-        lua_call(L, 0, 0);
+        // Include when it was scheduled to run as an arg, allowing callees to do a diff between
+        // scheduled and actual time.
+        lua_pushnumber(L, next_run);
+        lua_call(L, 1, 0);
 
         if (L->status == LUA_YIELD || L->status == LUA_BREAK)
         {
