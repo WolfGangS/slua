@@ -122,8 +122,8 @@ static int lltimers_on(lua_State *L)
         luaL_typeerror(L, 3, "function or callable table");
     lua_settop(L, 3);
 
-    if (seconds <= 0.0)
-        luaL_errorL(L, "timer interval must be positive");
+    if (seconds < 0.0)
+        luaL_errorL(L, "timer interval must be positive or 0");
 
     // Get current time
     double current_time = sl_state->clockProvider ? sl_state->clockProvider(L) : 0.0;
@@ -176,8 +176,8 @@ static int lltimers_once(lua_State *L)
         luaL_typeerror(L, 3, "function or callable table");
     lua_settop(L, 3);
 
-    if (seconds <= 0.0)
-        luaL_errorL(L, "timer interval must be positive");
+    if (seconds < 0.0)
+        luaL_errorL(L, "timer interval must be positive or 0");
 
     // Get current time
     double current_time = sl_state->clockProvider ? sl_state->clockProvider(L) : 0.0;

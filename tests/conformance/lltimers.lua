@@ -135,11 +135,15 @@ local success, err = pcall(function()
 end)
 assert(success == false)
 
--- Test zero interval
-success, err = pcall(function()
-    LLTimers:on(0, function() end)
-end)
-assert(success == false)
+-- Test zero interval (0 means "ASAP" and is valid)
+timer1_count = 0
+local function zero_interval_handler()
+    timer1_count += 1
+end
+LLTimers:on(0, zero_interval_handler)
+LLTimers:_tick()
+assert(timer1_count == 1)
+LLTimers:off(zero_interval_handler)
 
 -- Test invalid handler type
 success, err = pcall(function()
