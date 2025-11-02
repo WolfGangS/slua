@@ -18,6 +18,136 @@
 #   pragma STDC FP_CONTRACT OFF
 #endif
 
+// Normalizes an index from Lua stack to 0-based array index
+// Handles 1-based vs 0-based mode and negative indices
+static int _checkobjectindex(lua_State *L, int len, int stack_idx, bool compat_mode)
+{
+    int idx = luaL_checkinteger(L, stack_idx);
+
+    if (!compat_mode)
+    {
+        if (idx == 0)
+        {
+            luaL_error(L, "passed 0 when a 1-based index was expected");
+        }
+        else if (idx > 0)
+        {
+            // positive indices need to be shifted down to be 0-based.
+            // negative indices are handled later.
+            idx -= 1;
+        }
+    }
+
+    if(idx < 0)
+    {
+        return len + idx;
+    }
+    return idx;
+}
+
+// Helper struct for range extraction (normal and wraparound cases)
+struct RangeExtractionInfo {
+    bool whole_object;      // Return entire object unchanged
+    bool empty;             // Return empty object
+    int start1, len1;       // First segment (always used if not whole/empty)
+    int start2, len2;       // Second segment (used only for wraparound)
+};
+
+// Calculates range extraction info for list/string operations
+// Handles both normal (start <= end) and wraparound (start > end) cases
+// Out-of-bounds indices are clamped to valid range (LSL behavior)
+static RangeExtractionInfo _calc_extraction_range(
+    lua_State *L,
+    int obj_len,           // Length of list/string
+    int start_stack_idx,   // Stack position of start index
+    int end_stack_idx,     // Stack position of end index
+    bool compat_mode       // LSL vs SLua mode
+)
+{
+    RangeExtractionInfo result = {false, false, 0, 0, 0, 0};
+
+    // Empty input always returns empty
+    if (obj_len == 0)
+    {
+        result.empty = true;
+        return result;
+    }
+
+    // Normalize indices (handles 1-based/0-based conversion and negative indices)
+    int start_idx = _checkobjectindex(L, obj_len, start_stack_idx, compat_mode);
+    int end_idx = _checkobjectindex(L, obj_len, end_stack_idx, compat_mode);
+
+    if (start_idx <= end_idx)
+    {
+        // Normal case: start <= end
+        // Both out of bounds check
+        if (start_idx >= obj_len || end_idx < 0)
+        {
+            result.empty = true;
+            return result;
+        }
+
+        // Clamp to valid range (LSL behavior)
+        if (end_idx >= obj_len) end_idx = obj_len - 1;
+        start_idx = std::max(0, start_idx);
+        end_idx = std::max(0, end_idx);
+
+        result.start1 = start_idx;
+        result.len1 = end_idx - start_idx + 1;
+        result.len1 = std::max(0, result.len1);
+        result.start2 = 0;
+        result.len2 = 0;
+    }
+    else
+    {
+        // Wraparound case: start > end
+        // Select items where (i <= end || i >= start)
+        // This gives us: [0, end] + [start, obj_len-1]
+
+        // Check if we want the whole object
+        if (end_idx >= obj_len
+            || start_idx <= 0
+            || start_idx - end_idx <= 1)
+        {
+            result.whole_object = true;
+            return result;
+        }
+
+        // Two segments
+        // First segment: [0, end_idx]
+        if (end_idx >= 0)
+        {
+            result.start1 = 0;
+            result.len1 = end_idx + 1;
+        }
+        else
+        {
+            result.start1 = 0;
+            result.len1 = 0;
+        }
+
+        // Second segment: [start_idx, obj_len-1]
+        if (start_idx < obj_len)
+        {
+            result.start2 = start_idx;
+            result.len2 = obj_len - start_idx;
+        }
+        else
+        {
+            result.start2 = 0;
+            result.len2 = 0;
+        }
+
+        // If both segments are empty, return empty
+        if (result.len1 == 0 && result.len2 == 0)
+        {
+            result.empty = true;
+        }
+    }
+
+    return result;
+}
+
 static int ll_sin(lua_State *L)
 {
     luaSL_pushfloat(L, sin(luaL_checknumber(L, 1)));
@@ -38,7 +168,7 @@ static int _list_accessor_helper(lua_State *L, LSLIType type)
     auto *h = hvalue(luaA_toobject(L, 1));
     int len = luaH_getn(h);
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
-    int idx = luaSL_checkobjectindex(L, len, 2, compat_mode);
+    int idx = _checkobjectindex(L, len, 2, compat_mode);
     if (idx < len && idx >= 0)
     {
         lua_pushcfunction(L, lsl_cast_list_elem, "lsl_cast_list_elem");
@@ -98,7 +228,7 @@ static int ll_list2vector(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int idx = luaSL_checkobjectindex(L, len, 2, compat_mode);
+    int idx = _checkobjectindex(L, len, 2, compat_mode);
     if (idx < len && idx >= 0)
     {
         // This accessor does NOT auto-cast!
@@ -121,7 +251,7 @@ static int ll_list2rot(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int idx = luaSL_checkobjectindex(L, len, 2, compat_mode);
+    int idx = _checkobjectindex(L, len, 2, compat_mode);
     if (idx < len && idx >= 0)
     {
         // This accessor does NOT auto-cast!
@@ -144,7 +274,7 @@ static int ll_getlistentrytype(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int idx = luaSL_checkobjectindex(L, len, 2, compat_mode);
+    int idx = _checkobjectindex(L, len, 2, compat_mode);
     if (idx < len && idx >= 0)
     {
         luaSL_pushinteger(L, lua_lsl_type(&h->array[idx]));
@@ -171,64 +301,40 @@ static int ll_list2list(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int target1 = luaSL_checkobjectindex(L, len, 2, compat_mode);
-    int target2 = luaSL_checkobjectindex(L, len, 3, compat_mode);
+    // Calculate extraction range (handles normal and wraparound cases)
+    auto range = _calc_extraction_range(L, len, 2, 3, compat_mode);
 
+    // Handle special cases
+    if (range.empty)
+    {
+        lua_newtable(L);
+        return 1;
+    }
+
+    if (range.whole_object)
+    {
+        // Cloning is important in case lists are ever mutable
+        TValue new_tv;
+        sethvalue(L, &new_tv, luaH_clone(L, h));
+        luaA_pushobject(L, &new_tv);
+        return 1;
+    }
+
+    // Build wanted_indices from range info
     int wanted_len = 0;
-
     std::vector<std::pair<int, int>> wanted_indices;
     wanted_indices.reserve(2);
 
-    if (target1 <= target2)
+    if (range.len1 > 0)
     {
-        // if (i >= target1 && i <= target2)
-        // Both out of bounds, return empty list.
-        if (target1 >= len || target2 < 0)
-        {
-            lua_newtable(L);
-            return 1;
-        }
-
-        // Only the end is out of bounds, truncate to end of list.
-        if (target2 >= len) target2 = len - 1;
-
-        target1 = std::max(0,target1);
-        target2 = std::max(0,target2);
-
-        wanted_len = target2 - target1 + 1;
-        wanted_len = std::max(0, wanted_len);
-        wanted_indices.push_back({target1, wanted_len});
+        wanted_indices.push_back({range.start1, range.len1});
+        wanted_len += range.len1;
     }
-    else // target1 > target2
+
+    if (range.len2 > 0)
     {
-        // LSL2 behavior: include all items where this is true:
-        // (i <= target2 || i >= target1)
-
-        // See if we want the whole list.
-        if (target2 >= len
-            || target1 <= 0
-            || target1 - target2 <= 1)
-        {
-            // Cloning is important in case lists are ever mutable
-            TValue new_tv;
-            sethvalue(L, &new_tv, luaH_clone(L, h));
-            luaA_pushobject(L, &new_tv);
-            return 1;
-        }
-        else
-        {
-            if (target2 >= 0)
-            {
-                wanted_indices.push_back({0, target2 + 1});
-                wanted_len += target2 + 1;
-            }
-
-            if (target1 < len)
-            {
-                wanted_indices.push_back({target1, len - target1});
-                wanted_len += len - target1;
-            }
-        }
+        wanted_indices.push_back({range.start2, range.len2});
+        wanted_len += range.len2;
     }
 
     lua_createtable(L, wanted_len, 0);
@@ -314,28 +420,30 @@ static int ll_deletesublist(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int target1 = luaSL_checkobjectindex(L, len, 2, compat_mode);
-    int target2 = luaSL_checkobjectindex(L, len, 3, compat_mode);
+    // Calculate deletion range (inverse of extraction)
+    auto range = _calc_extraction_range(L, len, 2, 3, compat_mode);
 
-    if (target1 <= target2)
+    // For delete: empty range means nothing to delete, return whole list
+    if (range.empty)
     {
-        if (target1 >= len
-            || target2 < 0)
-        {
-            // Just push the whole input list
-            // Cloning is important in case lists are ever mutable
-            TValue new_tv;
-            sethvalue(L, &new_tv, luaH_clone(L, h));
-            luaA_pushobject(L, &new_tv);
-            return 1;
-        }
+        // Cloning is important in case lists are ever mutable
+        TValue new_tv;
+        sethvalue(L, &new_tv, luaH_clone(L, h));
+        luaA_pushobject(L, &new_tv);
+        return 1;
+    }
 
-        // Only the end is out of bounds, truncate to end of list.
-        if (target2 >= len) target2 = len - 1;
+    // For delete: whole_object means delete everything, return empty list
+    if (range.whole_object)
+    {
+        lua_newtable(L);
+        return 1;
+    }
 
-        target1 = std::max(0,target1);
-
-        int count = target2 - target1 + 1;
+    // Normal case: delete single range [start1, start1+len1)
+    if (range.len2 == 0)
+    {
+        int count = range.len1;
         int wanted_len = len - count;
         lua_createtable(L, wanted_len, 0);
         auto *new_h = hvalue(luaA_toobject(L, -1));
@@ -343,8 +451,8 @@ static int ll_deletesublist(lua_State *L)
         int j = 0;
         for (int i=0; i<len; ++i)
         {
-            // skip by the ranges we want to delete
-            if (i >= target1 && i < target1 + count)
+            // Skip the range we want to delete
+            if (i >= range.start1 && i < range.start1 + count)
             {
                 continue;
             }
@@ -353,32 +461,20 @@ static int ll_deletesublist(lua_State *L)
         }
         return 1;
     }
-    else // target1 > target2
+    else
     {
-        // LSL2 Behavior: include in results if (i > target2 && i < target1)
-        // Both out of bounds, return empty list.
-        if (target2 >= len - 1
-            || target1 - target2 <= 1
-            || target1 < 0)
-        {
-            lua_newtable(L);
-            return 1;
-        }
-
-        // Only the end is out of bounds, truncate to end of list.
-        if (target1 >= len) target1 = len;
-
-        if (target2 < -1) target2 = -1;
-
-        int count = target1 - target2 - 1;
-        count = std::max(0,count);
-
-        // This is basically a special case of list2list
+        // Wraparound case: delete [0, len1) and [start2, start2+len2)
+        // This means KEEP the middle section: [len1, start2)
+        // Delegate to list2list to extract the kept section
+        // Always use compat_mode=true since we're providing already-normalized 0-based indices
         lua_pushboolean(L, true);
         lua_pushcclosurek(L, ll_list2list, "List2List", 1, nullptr);
         lua_pushvalue(L, 1);
-        luaSL_pushinteger(L, target2 + 1);
-        luaSL_pushinteger(L, target2 + count);
+        // The kept section is from (end+1) to (start-1) in 0-based indices
+        // range.len1 = end_idx + 1, so start of kept section is range.len1
+        // range.start2 is start of second wraparound segment, so end of kept section is range.start2 - 1
+        luaSL_pushinteger(L, range.len1);
+        luaSL_pushinteger(L, range.start2 - 1);
         lua_call(L, 3, 1);
         return 1;
     }
@@ -397,7 +493,7 @@ static int ll_listinsertlist(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int target = luaSL_checkobjectindex(L, dest_len, 3, compat_mode);
+    int target = _checkobjectindex(L, dest_len, 3, compat_mode);
 
     LuaTable *cloned_h = nullptr;
     TValue new_tv;
@@ -475,7 +571,7 @@ static int ll_listreplacelist(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int target = luaSL_checkobjectindex(L, orig_len, 3, compat_mode);
+    int target = _checkobjectindex(L, orig_len, 3, compat_mode);
 
     LuaTable *cloned_h = nullptr;
     TValue new_tv;
@@ -513,7 +609,7 @@ static int ll_listreplacelist(lua_State *L)
 // These are a combination of logic from `LslLibrary.cs`, Mono's `Math.cs` and Mono's `sysmath.c`.
 static int ll_abs(lua_State *L)
 {
-    int val = luaL_checkunsigned(L, 1);
+    int val = luaL_checkinteger(L, 1);
     // Deal with weird abs() implementations
     // Overflow will just make this `INT32_MIN` again
     if (val == INT32_MIN)
@@ -801,7 +897,7 @@ static int ll_stringlength(lua_State *L)
 static int ll_getsubstring(lua_State* L)
 {
     // UTF-8 aware substring extraction with 1-based indexing (SLua mode)
-    // or 0-based indexing (LSL compat mode). Supports negative indices.
+    // or 0-based indexing (LSL compat mode). Supports negative indices and wraparound.
     // For demo/test purposes only, as it doesn't truncate at null like the real one.
     size_t str_len;
     const char *str_val = luaL_checklstring(L, 1, &str_len);
@@ -809,25 +905,41 @@ static int ll_getsubstring(lua_State* L)
 
     // Convert UTF-8 string to codepoints
     CodepointString codepoints = utf8str_to_codepoints(str_val, str_len);
-    auto num_codes = (ptrdiff_t)codepoints.length();
+    int num_codes = (int)codepoints.length();
 
-    // Normalize indices (handles 1-based vs 0-based and negative indices)
-    int start_idx = luaSL_checkobjectindex(L, (int)num_codes, 2, compat_mode);
-    int end_idx = luaSL_checkobjectindex(L, (int)num_codes, 3, compat_mode);
+    // Calculate extraction range (handles normal and wraparound cases)
+    auto range = _calc_extraction_range(L, num_codes, 2, 3, compat_mode);
 
-    // Bounds checking - return empty string if out of bounds
-    if (start_idx < 0 || start_idx >= num_codes || end_idx < 0 || end_idx >= num_codes || start_idx > end_idx)
+    // Handle special cases
+    if (range.empty)
     {
         lua_pushstring(L, "");
         return 1;
     }
 
-    // Extract substring from codepoint array
-    ptrdiff_t substr_len = end_idx - start_idx + 1;
-    CodepointString substr = codepoints.substr(start_idx, substr_len);
+    if (range.whole_object)
+    {
+        lua_pushvalue(L, 1);
+        return 1;
+    }
 
-    // Convert back to UTF-8
-    std::string result = codepoints_to_utf8str(substr, substr.length());
+    // Extract substring(s)
+    std::string result;
+
+    if (range.len2 == 0)
+    {
+        // Normal case: single segment
+        CodepointString substr = codepoints.substr(range.start1, range.len1);
+        result = codepoints_to_utf8str(substr, substr.length());
+    }
+    else
+    {
+        // Wraparound case: concatenate two segments
+        CodepointString substr = codepoints.substr(range.start1, range.len1) + codepoints.substr(range.start2, range.len2);
+
+        result = codepoints_to_utf8str(substr, substr.length());
+    }
+
     lua_pushlstring(L, result.c_str(), result.length());
     return 1;
 }

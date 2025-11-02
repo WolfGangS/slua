@@ -660,6 +660,11 @@ TEST_CASE("List operations")
     runConformance("list_operations.lsl");
 }
 
+TEST_CASE("String operations")
+{
+    runConformance("string_operations.lsl");
+}
+
 TEST_CASE("Unicode")
 {
     runConformance("unicode.lsl");
