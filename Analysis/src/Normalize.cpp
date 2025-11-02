@@ -22,9 +22,14 @@ LUAU_FASTINTVARIABLE(LuauNormalizeCacheLimit, 100000)
 LUAU_FASTINTVARIABLE(LuauNormalizeIntersectionLimit, 200)
 LUAU_FASTINTVARIABLE(LuauNormalizeUnionLimit, 100)
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAGVARIABLE(LuauNormalizationReorderFreeTypeIntersect)
 LUAU_FASTFLAG(LuauUseWorkspacePropToChooseSolver)
 LUAU_FASTFLAG(LuauReduceSetTypeStackPressure)
+LUAU_FASTFLAGVARIABLE(LuauImproveNormalizeExternTypeCheck)
+LUAU_FASTFLAG(LuauPassBindableGenericsByReference)
+LUAU_FASTFLAGVARIABLE(LuauNormalizerUnionTyvarsTakeMaxSize)
+LUAU_FASTFLAGVARIABLE(LuauNormalizationPreservesAny)
+LUAU_FASTFLAGVARIABLE(LuauNormalizerStepwiseFuel)
+LUAU_FASTINTVARIABLE(LuauNormalizerInitialFuel, 3000)
 
 namespace Luau
 {
@@ -36,6 +41,32 @@ static bool shouldEarlyExit(NormalizationResult res)
         return true;
     return false;
 }
+
+class NormalizerHitLimits : public std::exception
+{
+};
+
+struct FuelInitializer
+{
+    NotNull<Normalizer> normalizer;
+    bool initializedFuel;
+
+    explicit FuelInitializer(NotNull<Normalizer> normalizer)
+        : normalizer(normalizer)
+        , initializedFuel(normalizer->initializeFuel())
+    {
+    }
+
+    FuelInitializer(const FuelInitializer& rhs) = delete;
+
+    FuelInitializer& operator=(const FuelInitializer&) = delete;
+
+    ~FuelInitializer()
+    {
+        if (initializedFuel)
+            normalizer->clearFuel();
+    }
+};
 
 NormalizedStringType::NormalizedStringType() {}
 
@@ -144,7 +175,8 @@ bool NormalizedFunctionType::isNever() const
 }
 
 NormalizedType::NormalizedType(NotNull<BuiltinTypes> builtinTypes)
-    : tops(builtinTypes->neverType)
+    : builtinTypes(builtinTypes)
+    , tops(builtinTypes->neverType)
     , booleans(builtinTypes->neverType)
     , errors(builtinTypes->neverType)
     , nils(builtinTypes->neverType)
@@ -170,10 +202,21 @@ bool NormalizedType::isUnknown() const
     {
         if (auto ct = get<ExternType>(t))
         {
-            if (ct->name == "class" && disj.empty())
+            if (FFlag::LuauImproveNormalizeExternTypeCheck)
             {
-                isTopExternType = true;
-                break;
+                if (t == builtinTypes->externType && disj.empty())
+                {
+                    isTopExternType = true;
+                    break;
+                }
+            }
+            else
+            {
+                if (ct->name == "userdata" && disj.empty())
+                {
+                    isTopExternType = true;
+                    break;
+                }
             }
         }
     }
@@ -328,7 +371,22 @@ NormalizationResult Normalizer::isInhabited(const NormalizedType* norm)
 {
     Set<TypeId> seen{nullptr};
 
-    return isInhabited(norm, seen);
+    if (FFlag::LuauNormalizerStepwiseFuel)
+    {
+        try
+        {
+            FuelInitializer fi{NotNull{this}};
+            return isInhabited(norm, seen);
+        }
+        catch (const NormalizerHitLimits&)
+        {
+            return NormalizationResult::HitLimits;
+        }
+    }
+    else
+    {
+        return isInhabited(norm, seen);
+    }
 }
 
 NormalizationResult Normalizer::isInhabited(const NormalizedType* norm, Set<TypeId>& seen)
@@ -336,6 +394,9 @@ NormalizationResult Normalizer::isInhabited(const NormalizedType* norm, Set<Type
     RecursionCounter _rc(&sharedState->counters.recursionCount);
     if (!withinResourceLimits() || !norm)
         return NormalizationResult::HitLimits;
+
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
 
     if (!get<NeverType>(norm->tops) || !get<NeverType>(norm->booleans) || !get<NeverType>(norm->errors) || !get<NeverType>(norm->nils) ||
         !get<NeverType>(norm->numbers) || !get<NeverType>(norm->threads) || !get<NeverType>(norm->buffers) || !norm->externTypes.isNever() ||
@@ -368,14 +429,38 @@ NormalizationResult Normalizer::isInhabited(TypeId ty)
     }
 
     Set<TypeId> seen{nullptr};
-    NormalizationResult result = isInhabited(ty, seen);
 
-    if (cacheInhabitance && result == NormalizationResult::True)
-        cachedIsInhabited[ty] = true;
-    else if (cacheInhabitance && result == NormalizationResult::False)
-        cachedIsInhabited[ty] = false;
+    if (FFlag::LuauNormalizerStepwiseFuel)
+    {
+        try
+        {
+            FuelInitializer fi{NotNull{this}};
+            NormalizationResult result = isInhabited(ty, seen);
 
-    return result;
+            if (cacheInhabitance && result == NormalizationResult::True)
+                cachedIsInhabited[ty] = true;
+            else if (cacheInhabitance && result == NormalizationResult::False)
+                cachedIsInhabited[ty] = false;
+
+            return result;
+        }
+        catch (const NormalizerHitLimits&)
+        {
+            return NormalizationResult::HitLimits;
+        }
+    }
+    else
+    {
+
+        NormalizationResult result = isInhabited(ty, seen);
+
+        if (cacheInhabitance && result == NormalizationResult::True)
+            cachedIsInhabited[ty] = true;
+        else if (cacheInhabitance && result == NormalizationResult::False)
+            cachedIsInhabited[ty] = false;
+
+        return result;
+    }
 }
 
 NormalizationResult Normalizer::isInhabited(TypeId ty, Set<TypeId>& seen)
@@ -384,6 +469,8 @@ NormalizationResult Normalizer::isInhabited(TypeId ty, Set<TypeId>& seen)
     if (!withinResourceLimits())
         return NormalizationResult::HitLimits;
 
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
     // TODO: use log.follow(ty), CLI-64291
     ty = follow(ty);
 
@@ -439,11 +526,29 @@ NormalizationResult Normalizer::isIntersectionInhabited(TypeId left, TypeId righ
 {
     Set<TypeId> seen{nullptr};
     SeenTablePropPairs seenTablePropPairs{{nullptr, nullptr}};
-    return isIntersectionInhabited(left, right, seenTablePropPairs, seen);
+    if (FFlag::LuauNormalizerStepwiseFuel)
+    {
+        try
+        {
+            FuelInitializer fi{NotNull{this}};
+            return isIntersectionInhabited(left, right, seenTablePropPairs, seen);
+        }
+        catch (const NormalizerHitLimits&)
+        {
+            return NormalizationResult::HitLimits;
+        }
+    }
+    else
+    {
+        return isIntersectionInhabited(left, right, seenTablePropPairs, seen);
+    }
 }
 
 NormalizationResult Normalizer::isIntersectionInhabited(TypeId left, TypeId right, SeenTablePropPairs& seenTablePropPairs, Set<TypeId>& seenSet)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     left = follow(left);
     right = follow(right);
     // We're asking if intersection is inhabited between left and right but we've already seen them ....
@@ -814,9 +919,27 @@ std::shared_ptr<const NormalizedType> Normalizer::normalize(TypeId ty)
     NormalizedType norm{builtinTypes};
     Set<TypeId> seenSetTypes{nullptr};
     SeenTablePropPairs seenTablePropPairs{{nullptr, nullptr}};
-    NormalizationResult res = unionNormalWithTy(norm, ty, seenTablePropPairs, seenSetTypes);
-    if (res != NormalizationResult::True)
-        return nullptr;
+
+    if (FFlag::LuauNormalizerStepwiseFuel)
+    {
+        try
+        {
+            FuelInitializer fi{NotNull{this}};
+            NormalizationResult res = unionNormalWithTy(norm, ty, seenTablePropPairs, seenSetTypes);
+            if (res != NormalizationResult::True)
+                return nullptr;
+        }
+        catch (const NormalizerHitLimits&)
+        {
+            return nullptr;
+        }
+    }
+    else
+    {
+        NormalizationResult res = unionNormalWithTy(norm, ty, seenTablePropPairs, seenSetTypes);
+        if (res != NormalizationResult::True)
+            return nullptr;
+    }
 
     if (norm.isUnknown())
     {
@@ -841,8 +964,12 @@ NormalizationResult Normalizer::normalizeIntersections(
 {
     if (!arena)
         sharedState->iceHandler->ice("Normalizing types outside a module");
+
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     NormalizedType norm{builtinTypes};
-    norm.tops = builtinTypes->anyType;
+    norm.tops = FFlag::LuauNormalizationPreservesAny ? builtinTypes->unknownType : builtinTypes->anyType;
     // Now we need to intersect the two types
     for (auto ty : intersections)
     {
@@ -889,6 +1016,9 @@ const TypeIds* Normalizer::cacheTypeIds(TypeIds tys)
 
 TypeId Normalizer::unionType(TypeId here, TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     here = follow(here);
     there = follow(there);
 
@@ -935,6 +1065,9 @@ TypeId Normalizer::unionType(TypeId here, TypeId there)
 
 TypeId Normalizer::intersectionType(TypeId here, TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     here = follow(here);
     there = follow(there);
 
@@ -993,6 +1126,9 @@ void Normalizer::clearCaches()
 // ------- Normalizing unions
 TypeId Normalizer::unionOfTops(TypeId here, TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (get<NeverType>(here) || get<AnyType>(there))
         return there;
     else
@@ -1001,6 +1137,9 @@ TypeId Normalizer::unionOfTops(TypeId here, TypeId there)
 
 TypeId Normalizer::unionOfBools(TypeId here, TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (get<NeverType>(here))
         return there;
     if (get<NeverType>(there))
@@ -1014,6 +1153,9 @@ TypeId Normalizer::unionOfBools(TypeId here, TypeId there)
 
 void Normalizer::unionExternTypesWithExternType(TypeIds& heres, TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (heres.count(there))
         return;
 
@@ -1036,6 +1178,9 @@ void Normalizer::unionExternTypesWithExternType(TypeIds& heres, TypeId there)
 
 void Normalizer::unionExternTypes(TypeIds& heres, const TypeIds& theres)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     for (TypeId there : theres)
         unionExternTypesWithExternType(heres, there);
 }
@@ -1053,6 +1198,9 @@ static bool isSubclass(TypeId test, TypeId parent)
 
 void Normalizer::unionExternTypesWithExternType(NormalizedExternType& heres, TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     for (auto it = heres.ordering.begin(); it != heres.ordering.end();)
     {
         TypeId hereTy = *it;
@@ -1131,6 +1279,8 @@ void Normalizer::unionExternTypes(NormalizedExternType& heres, const NormalizedE
     // have negations to worry about combining. The two aspects combine to make
     // the tasks this method must perform different enough to warrant a separate
     // implementation.
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
 
     for (const TypeId thereTy : theres.ordering)
     {
@@ -1220,6 +1370,9 @@ void Normalizer::unionExternTypes(NormalizedExternType& heres, const NormalizedE
 
 void Normalizer::unionStrings(NormalizedStringType& here, const NormalizedStringType& there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (there.isString())
         here.resetToString();
     else if (here.isUnion() && there.isUnion())
@@ -1264,6 +1417,9 @@ void Normalizer::unionStrings(NormalizedStringType& here, const NormalizedString
 
 std::optional<TypePackId> Normalizer::unionOfTypePacks(TypePackId here, TypePackId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (here == there)
         return here;
 
@@ -1391,6 +1547,9 @@ std::optional<TypePackId> Normalizer::unionOfTypePacks(TypePackId here, TypePack
 
 std::optional<TypeId> Normalizer::unionOfFunctions(TypeId here, TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (get<ErrorType>(here))
         return here;
 
@@ -1407,7 +1566,7 @@ std::optional<TypeId> Normalizer::unionOfFunctions(TypeId here, TypeId there)
     if (hftv->genericPacks != tftv->genericPacks)
         return std::nullopt;
 
-    std::optional<TypePackId> argTypes = intersectionOfTypePacks(hftv->argTypes, tftv->argTypes);
+    std::optional<TypePackId> argTypes = intersectionOfTypePacks_INTERNAL(hftv->argTypes, tftv->argTypes);
     if (!argTypes)
         return std::nullopt;
 
@@ -1428,6 +1587,9 @@ std::optional<TypeId> Normalizer::unionOfFunctions(TypeId here, TypeId there)
 
 void Normalizer::unionFunctions(NormalizedFunctionType& heres, const NormalizedFunctionType& theres)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (heres.isTop)
         return;
     if (theres.isTop)
@@ -1459,6 +1621,9 @@ void Normalizer::unionFunctions(NormalizedFunctionType& heres, const NormalizedF
 
 void Normalizer::unionFunctionsWithFunction(NormalizedFunctionType& heres, TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (heres.isNever())
     {
         TypeIds tmps;
@@ -1491,6 +1656,9 @@ void Normalizer::unionTablesWithTable(TypeIds& heres, TypeId there)
 
 void Normalizer::unionTables(TypeIds& heres, const TypeIds& theres)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     for (TypeId there : theres)
     {
         if (there == builtinTypes->tableType)
@@ -1527,6 +1695,9 @@ void Normalizer::unionTables(TypeIds& heres, const TypeIds& theres)
 // That's what you get for having a type system with generics, intersection and union types.
 NormalizationResult Normalizer::unionNormals(NormalizedType& here, const NormalizedType& there, int ignoreSmallerTyvars)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     here.isCacheable &= there.isCacheable;
 
     TypeId tops = unionOfTops(here.tops, there.tops);
@@ -1539,8 +1710,20 @@ NormalizationResult Normalizer::unionNormals(NormalizedType& here, const Normali
         return NormalizationResult::True;
     }
 
-    if (here.tyvars.size() * there.tyvars.size() >= size_t(FInt::LuauNormalizeUnionLimit))
-        return NormalizationResult::HitLimits;
+    if (!FFlag::LuauNormalizerStepwiseFuel)
+    {
+        if (FFlag::LuauNormalizerUnionTyvarsTakeMaxSize)
+        {
+            auto maxSize = std::max(here.tyvars.size(), there.tyvars.size());
+            if (maxSize * maxSize >= size_t(FInt::LuauNormalizeUnionLimit))
+                return NormalizationResult::HitLimits;
+        }
+        else
+        {
+            if (here.tyvars.size() * there.tyvars.size() >= size_t(FInt::LuauNormalizeUnionLimit))
+                return NormalizationResult::HitLimits;
+        }
+    }
 
     for (auto it = there.tyvars.begin(); it != there.tyvars.end(); it++)
     {
@@ -1562,9 +1745,12 @@ NormalizationResult Normalizer::unionNormals(NormalizedType& here, const Normali
             return res;
     }
 
-    // Limit based on worst-case expansion of the function unions
-    if (here.functions.parts.size() * there.functions.parts.size() >= size_t(FInt::LuauNormalizeUnionLimit))
-        return NormalizationResult::HitLimits;
+    if (!FFlag::LuauNormalizerStepwiseFuel)
+    {
+        // Limit based on worst-case expansion of the function unions
+        if (here.functions.parts.size() * there.functions.parts.size() >= size_t(FInt::LuauNormalizeUnionLimit))
+            return NormalizationResult::HitLimits;
+    }
 
     here.booleans = unionOfBools(here.booleans, there.booleans);
     unionExternTypes(here.externTypes, there.externTypes);
@@ -1610,6 +1796,8 @@ bool Normalizer::useNewLuauSolver() const
 
 NormalizationResult Normalizer::intersectNormalWithNegationTy(TypeId toNegate, NormalizedType& intersect)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
 
     std::optional<NormalizedType> negated;
 
@@ -1634,6 +1822,9 @@ NormalizationResult Normalizer::unionNormalWithTy(
     RecursionCounter _rc(&sharedState->counters.recursionCount);
     if (!withinResourceLimits())
         return NormalizationResult::HitLimits;
+
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
 
     there = follow(there);
 
@@ -1679,7 +1870,7 @@ NormalizationResult Normalizer::unionNormalWithTy(
         seenSetTypes.insert(there);
 
         NormalizedType norm{builtinTypes};
-        norm.tops = builtinTypes->anyType;
+        norm.tops = FFlag::LuauNormalizationPreservesAny ? builtinTypes->unknownType : builtinTypes->anyType;
         for (IntersectionTypeIterator it = begin(itv); it != end(itv); ++it)
         {
             NormalizationResult res = intersectNormalWithTy(norm, *it, seenTablePropPairs, seenSetTypes);
@@ -1796,6 +1987,9 @@ NormalizationResult Normalizer::unionNormalWithTy(
 
 std::optional<NormalizedType> Normalizer::negateNormal(const NormalizedType& here)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     NormalizedType result{builtinTypes};
     result.isCacheable = here.isCacheable;
 
@@ -1892,6 +2086,9 @@ std::optional<NormalizedType> Normalizer::negateNormal(const NormalizedType& her
 
 TypeIds Normalizer::negateAll(const TypeIds& theres)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     TypeIds tys;
     for (TypeId there : theres)
         tys.insert(negate(there));
@@ -1900,6 +2097,9 @@ TypeIds Normalizer::negateAll(const TypeIds& theres)
 
 TypeId Normalizer::negate(TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     there = follow(there);
     if (get<AnyType>(there))
         return there;
@@ -1929,6 +2129,9 @@ TypeId Normalizer::negate(TypeId there)
 
 void Normalizer::subtractPrimitive(NormalizedType& here, TypeId ty)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     const PrimitiveType* ptv = get<PrimitiveType>(follow(ty));
     LUAU_ASSERT(ptv);
     switch (ptv->type)
@@ -1962,6 +2165,9 @@ void Normalizer::subtractPrimitive(NormalizedType& here, TypeId ty)
 
 void Normalizer::subtractSingleton(NormalizedType& here, TypeId ty)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     const SingletonType* stv = get<SingletonType>(ty);
     LUAU_ASSERT(stv);
 
@@ -2005,14 +2211,40 @@ void Normalizer::subtractSingleton(NormalizedType& here, TypeId ty)
 // ------- Normalizing intersections
 TypeId Normalizer::intersectionOfTops(TypeId here, TypeId there)
 {
-    if (get<NeverType>(here) || get<AnyType>(there))
-        return here;
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
+    if (FFlag::LuauNormalizationPreservesAny)
+    {
+        // NOTE: We need to wrap these in parens as C++'s parser isn't _quite_
+        // able to recognize these are generic function calls after macro
+        // expansion.
+        LUAU_ASSERT((is<NeverType, UnknownType, AnyType>(here)));
+        LUAU_ASSERT((is<NeverType, UnknownType, AnyType>(there)));
+
+        if (get<NeverType>(here) || get<NeverType>(there))
+            return builtinTypes->neverType;
+
+        if (get<AnyType>(here) || get<AnyType>(there))
+            return builtinTypes->anyType;
+
+        return builtinTypes->unknownType;
+
+    }
     else
-        return there;
+    {
+        if (get<NeverType>(here) || get<AnyType>(there))
+            return here;
+        else
+            return there;
+    }
 }
 
 TypeId Normalizer::intersectionOfBools(TypeId here, TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (get<NeverType>(here))
         return here;
     if (get<NeverType>(there))
@@ -2028,6 +2260,9 @@ TypeId Normalizer::intersectionOfBools(TypeId here, TypeId there)
 
 void Normalizer::intersectExternTypes(NormalizedExternType& heres, const NormalizedExternType& theres)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (theres.isNever())
     {
         heres.resetToNever();
@@ -2153,6 +2388,9 @@ void Normalizer::intersectExternTypes(NormalizedExternType& heres, const Normali
 
 void Normalizer::intersectExternTypesWithExternType(NormalizedExternType& heres, TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     for (auto it = heres.ordering.begin(); it != heres.ordering.end();)
     {
         TypeId hereTy = *it;
@@ -2224,6 +2462,9 @@ void Normalizer::intersectExternTypesWithExternType(NormalizedExternType& heres,
 
 void Normalizer::intersectStrings(NormalizedStringType& here, const NormalizedStringType& there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     /* There are 9 cases to worry about here
          Normalized Left    | Normalized Right
        C1 string            | string              ===> trivial
@@ -2290,6 +2531,25 @@ void Normalizer::intersectStrings(NormalizedStringType& here, const NormalizedSt
 
 std::optional<TypePackId> Normalizer::intersectionOfTypePacks(TypePackId here, TypePackId there)
 {
+    LUAU_ASSERT(FFlag::LuauNormalizerStepwiseFuel);
+
+    FuelInitializer fi{NotNull{this}};
+
+    try
+    {
+        return intersectionOfTypePacks_INTERNAL(here, there);
+    }
+    catch (const NormalizerHitLimits&)
+    {
+        return std::nullopt;
+    }
+}
+
+std::optional<TypePackId> Normalizer::intersectionOfTypePacks_INTERNAL(TypePackId here, TypePackId there)
+{
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (here == there)
         return here;
 
@@ -2411,6 +2671,9 @@ std::optional<TypePackId> Normalizer::intersectionOfTypePacks(TypePackId here, T
 
 std::optional<TypeId> Normalizer::intersectionOfTables(TypeId here, TypeId there, SeenTablePropPairs& seenTablePropPairs, Set<TypeId>& seenSet)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (here == there)
         return here;
 
@@ -2641,6 +2904,9 @@ std::optional<TypeId> Normalizer::intersectionOfTables(TypeId here, TypeId there
 
 void Normalizer::intersectTablesWithTable(TypeIds& heres, TypeId there, SeenTablePropPairs& seenTablePropPairs, Set<TypeId>& seenSetTypes)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     TypeIds tmp;
     for (TypeId here : heres)
     {
@@ -2653,6 +2919,9 @@ void Normalizer::intersectTablesWithTable(TypeIds& heres, TypeId there, SeenTabl
 
 void Normalizer::intersectTables(TypeIds& heres, const TypeIds& theres)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     TypeIds tmp;
     for (TypeId here : heres)
     {
@@ -2671,6 +2940,9 @@ void Normalizer::intersectTables(TypeIds& heres, const TypeIds& theres)
 
 std::optional<TypeId> Normalizer::intersectionOfFunctions(TypeId here, TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     const FunctionType* hftv = get<FunctionType>(here);
     LUAU_ASSERT(hftv);
     const FunctionType* tftv = get<FunctionType>(there);
@@ -2694,7 +2966,7 @@ std::optional<TypeId> Normalizer::intersectionOfFunctions(TypeId here, TypeId th
     }
     else if (hftv->argTypes == tftv->argTypes)
     {
-        std::optional<TypePackId> retTypesOpt = intersectionOfTypePacks(hftv->argTypes, tftv->argTypes);
+        std::optional<TypePackId> retTypesOpt = intersectionOfTypePacks_INTERNAL(hftv->argTypes, tftv->argTypes);
         if (!retTypesOpt)
             return std::nullopt;
         argTypes = hftv->argTypes;
@@ -2805,6 +3077,9 @@ std::optional<TypeId> Normalizer::unionSaturatedFunctions(TypeId here, TypeId th
     //   Proc. Principles and practice of declarative programming 2005, pp 198–208
     //   https://doi.org/10.1145/1069774.1069793
 
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     const FunctionType* hftv = get<FunctionType>(here);
     if (!hftv)
         return std::nullopt;
@@ -2832,6 +3107,9 @@ std::optional<TypeId> Normalizer::unionSaturatedFunctions(TypeId here, TypeId th
 
 void Normalizer::intersectFunctionsWithFunction(NormalizedFunctionType& heres, TypeId there)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (heres.isNever())
         return;
 
@@ -2864,6 +3142,9 @@ void Normalizer::intersectFunctionsWithFunction(NormalizedFunctionType& heres, T
 
 void Normalizer::intersectFunctions(NormalizedFunctionType& heres, const NormalizedFunctionType& theres)
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (heres.isNever())
         return;
     else if (theres.isNever())
@@ -2885,6 +3166,9 @@ NormalizationResult Normalizer::intersectTyvarsWithTy(
     Set<TypeId>& seenSetTypes
 )
 {
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     for (auto it = here.begin(); it != here.end();)
     {
         NormalizedType& inter = *it->second;
@@ -2906,6 +3190,9 @@ NormalizationResult Normalizer::intersectNormals(NormalizedType& here, const Nor
     if (!withinResourceLimits())
         return NormalizationResult::HitLimits;
 
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
+
     if (!get<NeverType>(there.tops))
     {
         here.tops = intersectionOfTops(here.tops, there.tops);
@@ -2919,26 +3206,26 @@ NormalizationResult Normalizer::intersectNormals(NormalizedType& here, const Nor
 
     // Limit based on worst-case expansion of the table/function intersections
     // This restriction can be relaxed when table intersection simplification is improved
-    if (here.tables.size() * there.tables.size() >= size_t(FInt::LuauNormalizeIntersectionLimit))
-        return NormalizationResult::HitLimits;
-
-    if (here.functions.parts.size() * there.functions.parts.size() >= size_t(FInt::LuauNormalizeIntersectionLimit))
-        return NormalizationResult::HitLimits;
-
-    if (FFlag::LuauNormalizationReorderFreeTypeIntersect)
+    if (!FFlag::LuauNormalizerStepwiseFuel)
     {
-        for (auto& [tyvar, inter] : there.tyvars)
+        if (here.tables.size() * there.tables.size() >= size_t(FInt::LuauNormalizeIntersectionLimit))
+            return NormalizationResult::HitLimits;
+
+        if (here.functions.parts.size() * there.functions.parts.size() >= size_t(FInt::LuauNormalizeIntersectionLimit))
+            return NormalizationResult::HitLimits;
+    }
+
+    for (auto& [tyvar, inter] : there.tyvars)
+    {
+        int index = tyvarIndex(tyvar);
+        if (ignoreSmallerTyvars < index)
         {
-            int index = tyvarIndex(tyvar);
-            if (ignoreSmallerTyvars < index)
+            auto [found, fresh] = here.tyvars.emplace(tyvar, std::make_unique<NormalizedType>(NormalizedType{builtinTypes}));
+            if (fresh)
             {
-                auto [found, fresh] = here.tyvars.emplace(tyvar, std::make_unique<NormalizedType>(NormalizedType{builtinTypes}));
-                if (fresh)
-                {
-                    NormalizationResult res = unionNormals(*found->second, here, index);
-                    if (res != NormalizationResult::True)
-                        return res;
-                }
+                NormalizationResult res = unionNormals(*found->second, here, index);
+                if (res != NormalizationResult::True)
+                    return res;
             }
         }
     }
@@ -2954,24 +3241,6 @@ NormalizationResult Normalizer::intersectNormals(NormalizedType& here, const Nor
     here.buffers = (get<NeverType>(there.buffers) ? there.buffers : here.buffers);
     intersectFunctions(here.functions, there.functions);
     intersectTables(here.tables, there.tables);
-
-    if (!FFlag::LuauNormalizationReorderFreeTypeIntersect)
-    {
-        for (auto& [tyvar, inter] : there.tyvars)
-        {
-            int index = tyvarIndex(tyvar);
-            if (ignoreSmallerTyvars < index)
-            {
-                auto [found, fresh] = here.tyvars.emplace(tyvar, std::make_unique<NormalizedType>(NormalizedType{builtinTypes}));
-                if (fresh)
-                {
-                    NormalizationResult res = unionNormals(*found->second, here, index);
-                    if (res != NormalizationResult::True)
-                        return res;
-                }
-            }
-        }
-    }
 
     for (auto it = here.tyvars.begin(); it != here.tyvars.end();)
     {
@@ -3010,6 +3279,9 @@ NormalizationResult Normalizer::intersectNormalWithTy(
     RecursionCounter _rc(&sharedState->counters.recursionCount);
     if (!withinResourceLimits())
         return NormalizationResult::HitLimits;
+
+    if (FFlag::LuauNormalizerStepwiseFuel)
+        consumeFuel();
 
     there = follow(there);
 
@@ -3057,7 +3329,7 @@ NormalizationResult Normalizer::intersectNormalWithTy(
 
     NormalizedTyvars tyvars = std::move(here.tyvars);
 
-    if (const FunctionType* utv = get<FunctionType>(there))
+    if (get<FunctionType>(there))
     {
         NormalizedFunctionType functions = std::move(here.functions);
         clearNormal(here);
@@ -3148,9 +3420,9 @@ NormalizationResult Normalizer::intersectNormalWithTy(
     else if (const NegationType* ntv = get<NegationType>(there))
     {
         TypeId t = follow(ntv->ty);
-        if (const PrimitiveType* ptv = get<PrimitiveType>(t))
+        if (get<PrimitiveType>(t))
             subtractPrimitive(here, ntv->ty);
-        else if (const SingletonType* stv = get<SingletonType>(t))
+        else if (get<SingletonType>(t))
             subtractSingleton(here, follow(ntv->ty));
         else if (get<ExternType>(t))
         {
@@ -3379,6 +3651,34 @@ TypeId Normalizer::typeFromNormal(const NormalizedType& norm)
         return arena->addType(UnionType{std::move(result)});
 }
 
+bool Normalizer::initializeFuel()
+{
+    LUAU_ASSERT(FFlag::LuauNormalizerStepwiseFuel);
+    if (fuel)
+        return false;
+
+    fuel = FInt::LuauNormalizerInitialFuel;
+    return true;
+}
+
+void Normalizer::clearFuel()
+{
+    LUAU_ASSERT(FFlag::LuauNormalizerStepwiseFuel);
+    fuel = std::nullopt;
+}
+
+void Normalizer::consumeFuel()
+{
+    LUAU_ASSERT(FFlag::LuauNormalizerStepwiseFuel);
+    if (fuel)
+    {
+        (*fuel)--;
+        if (fuel <= 0)
+            throw NormalizerHitLimits();
+    }
+}
+
+
 bool isSubtype(
     TypeId subTy,
     TypeId superTy,
@@ -3456,7 +3756,8 @@ bool isSubtype(
         {
             Subtyping subtyping{builtinTypes, NotNull{&arena}, simplifier, NotNull{&normalizer}, NotNull{&typeFunctionRuntime}, NotNull{&ice}};
 
-            return subtyping.isSubtype(subPack, superPack, scope).isSubtype;
+            return FFlag::LuauPassBindableGenericsByReference ? subtyping.isSubtype(subPack, superPack, scope, {}).isSubtype
+                                                              : subtyping.isSubtype_DEPRECATED(subPack, superPack, scope).isSubtype;
         }
         else
         {
@@ -3473,7 +3774,8 @@ bool isSubtype(
         {
             Subtyping subtyping{builtinTypes, NotNull{&arena}, simplifier, NotNull{&normalizer}, NotNull{&typeFunctionRuntime}, NotNull{&ice}};
 
-            return subtyping.isSubtype(subPack, superPack, scope).isSubtype;
+            return FFlag::LuauPassBindableGenericsByReference ? subtyping.isSubtype(subPack, superPack, scope, {}).isSubtype
+                                                              : subtyping.isSubtype_DEPRECATED(subPack, superPack, scope).isSubtype;
         }
         else
         {

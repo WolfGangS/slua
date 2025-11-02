@@ -10,9 +10,6 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauReturnMappedGenericPacksFromSubtyping2)
-LUAU_FASTFLAG(LuauSolverAgnosticStringification)
-LUAU_FASTFLAG(LuauSubtypingGenericPacksDoesntUseVariance)
 
 TEST_SUITE_BEGIN("IntersectionTypes");
 
@@ -164,7 +161,6 @@ TEST_CASE_FIXTURE(Fixture, "propagates_name")
 
 TEST_CASE_FIXTURE(Fixture, "index_on_an_intersection_type_with_property_guaranteed_to_exist")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     CheckResult result = check(R"(
         type A = {x: {y: number}}
         type B = {x: {y: number}}
@@ -649,7 +645,6 @@ TEST_CASE_FIXTURE(Fixture, "union_saturate_overloaded_functions")
 
 TEST_CASE_FIXTURE(Fixture, "intersection_of_tables")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     CheckResult result = check(R"(
         function f(x: { p : number?, q : string? } & { p : number?, q : number?, r : number? })
             local y : { p : number?, q : nil, r : number? } = x -- OK
@@ -682,7 +677,6 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables")
 
 TEST_CASE_FIXTURE(Fixture, "intersection_of_tables_with_top_properties")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     CheckResult result = check(R"(
         function f(x : { p : number?, q : any } & { p : unknown, q : string? })
             local y : { p : number?, q : string? } = x -- OK
@@ -736,7 +730,6 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables_with_never_properties")
 
 TEST_CASE_FIXTURE(Fixture, "overloaded_functions_returning_intersections")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     CheckResult result = check(R"(
         function f(x : ((number?) -> ({ p : number } & { q : number })) & ((string?) -> ({ p : number } & { r : number })))
             local y : (nil) -> { p : number, q : number, r : number} = x -- OK
@@ -856,8 +849,6 @@ could not be converted into
 
 TEST_CASE_FIXTURE(Fixture, "overloaded_functions_mentioning_generic_packs")
 {
-    ScopedFastFlag sff{FFlag::LuauSubtypingGenericPacksDoesntUseVariance, true};
-
     CheckResult result = check(R"(
         function f<a...,b...>()
             function g(x : ((number?, a...) -> (number?, b...)) & ((string?, a...) -> (string?, b...)))
@@ -1123,8 +1114,6 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_1")
 
 TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_2")
 {
-    ScopedFastFlag _{FFlag::LuauSubtypingGenericPacksDoesntUseVariance, true};
-
     CheckResult result = check(R"(
         function f<a...,b...>()
             function g(x : ((a...) -> ()) & ((b...) -> ()))
@@ -1154,9 +1143,6 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_2")
 
 TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_3")
 {
-    ScopedFastFlag sff1{FFlag::LuauSubtypingGenericPacksDoesntUseVariance, true};
-    ScopedFastFlag sff2{FFlag::LuauReturnMappedGenericPacksFromSubtyping2, true};
-
     CheckResult result = check(R"(
         function f<a...>()
             function g(x : (() -> a...) & (() -> (number?,a...)))
@@ -1187,9 +1173,6 @@ could not be converted into
 
 TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_4")
 {
-    ScopedFastFlag _{FFlag::LuauReturnMappedGenericPacksFromSubtyping2, true};
-    ScopedFastFlag sff{FFlag::LuauSubtypingGenericPacksDoesntUseVariance, true};
-
     CheckResult result = check(R"(
         function f<a...>()
             function g(x : ((a...) -> ()) & ((number,a...) -> number))

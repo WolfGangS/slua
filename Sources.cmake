@@ -24,6 +24,7 @@ target_sources(Luau.Ast PRIVATE
     Ast/include/Luau/ParseOptions.h
     Ast/include/Luau/Parser.h
     Ast/include/Luau/ParseResult.h
+    Ast/include/Luau/PrettyPrinter.h
     Ast/include/Luau/StringUtils.h
     Ast/include/Luau/TimeTrace.h
 
@@ -34,6 +35,7 @@ target_sources(Luau.Ast PRIVATE
     Ast/src/Lexer.cpp
     Ast/src/Location.cpp
     Ast/src/Parser.cpp
+    Ast/src/PrettyPrinter.cpp
     Ast/src/StringUtils.cpp
     Ast/src/TimeTrace.cpp
 )
@@ -74,9 +76,11 @@ endif()
 target_sources(Luau.Config PRIVATE
     Config/include/Luau/Config.h
     Config/include/Luau/LinterConfig.h
+    Config/include/Luau/LuauConfig.h
 
     Config/src/Config.cpp
     Config/src/LinterConfig.cpp
+    Config/src/LuauConfig.cpp
 )
 
 # Luau.CodeGen Sources
@@ -190,6 +194,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/Constraint.h
     Analysis/include/Luau/ConstraintGenerator.h
     Analysis/include/Luau/ConstraintSet.h
+    Analysis/include/Luau/NativeStackGuard.h
     Analysis/include/Luau/ConstraintSolver.h
     Analysis/include/Luau/ControlFlow.h
     Analysis/include/Luau/DataFlowGraph.h
@@ -235,7 +240,6 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/ToDot.h
     Analysis/include/Luau/TopoSortStatements.h
     Analysis/include/Luau/ToString.h
-    Analysis/include/Luau/Transpiler.h
     Analysis/include/Luau/TxnLog.h
     Analysis/include/Luau/Type.h
     Analysis/include/Luau/TypeArena.h
@@ -286,6 +290,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/FragmentAutocomplete.cpp
     Analysis/src/Frontend.cpp
     Analysis/src/Generalization.cpp
+    Analysis/src/NativeStackGuard.cpp
     Analysis/src/GlobalTypes.cpp
     Analysis/src/InferPolarity.cpp
     Analysis/src/Instantiation.cpp
@@ -299,6 +304,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/Normalize.cpp
     Analysis/src/OverloadResolution.cpp
     Analysis/src/Quantify.cpp
+    Analysis/src/RecursionCounter.cpp
     Analysis/src/Refinement.cpp
     Analysis/src/RequireTracer.cpp
     Analysis/src/Scope.cpp
@@ -310,7 +316,6 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/ToDot.cpp
     Analysis/src/TopoSortStatements.cpp
     Analysis/src/ToString.cpp
-    Analysis/src/Transpiler.cpp
     Analysis/src/TxnLog.cpp
     Analysis/src/Type.cpp
     Analysis/src/TypeArena.cpp
@@ -539,7 +544,9 @@ if(TARGET Luau.UnitTest)
         tests/NonStrictTypeChecker.test.cpp
         tests/Normalize.test.cpp
         tests/NotNull.test.cpp
+        tests/OverloadResolver.test.cpp
         tests/Parser.test.cpp
+        tests/PrettyPrinter.test.cpp
         tests/RegisterCallbacks.cpp
         tests/RegisterCallbacks.h
         tests/RequireTracer.test.cpp
@@ -553,7 +560,6 @@ if(TARGET Luau.UnitTest)
         tests/ToDot.test.cpp
         tests/TopoSort.test.cpp
         tests/ToString.test.cpp
-        tests/Transpiler.test.cpp
         tests/TxnLog.test.cpp
         tests/TypeFunction.test.cpp
         tests/TypeFunction.user.test.cpp
@@ -640,24 +646,21 @@ endif()
 if(TARGET Luau.Require)
     # Luau.Require Sources
     target_sources(Luau.Require PRIVATE
-        Require/Runtime/include/Luau/Require.h
+    # Public headers
+    Require/include/Luau/Require.h
+    Require/include/Luau/RequireNavigator.h
 
-        Require/Runtime/src/Navigation.h
-        Require/Runtime/src/RequireImpl.h
+    # Internal headers
+    Require/src/Navigation.h
+    Require/src/PathUtilities.h
+    Require/src/RequireImpl.h
 
-        Require/Runtime/src/Navigation.cpp
-        Require/Runtime/src/Require.cpp
-        Require/Runtime/src/RequireImpl.cpp)
-endif()
-
-if(TARGET Luau.RequireNavigator)
-    # Luau.Require Sources
-    target_sources(Luau.RequireNavigator PRIVATE
-        Require/Navigator/include/Luau/PathUtilities.h
-        Require/Navigator/include/Luau/RequireNavigator.h
-
-        Require/Navigator/src/PathUtilities.cpp
-        Require/Navigator/src/RequireNavigator.cpp)
+    # Source files
+    Require/src/Navigation.cpp
+    Require/src/PathUtilities.cpp
+    Require/src/Require.cpp
+    Require/src/RequireImpl.cpp
+    Require/src/RequireNavigator.cpp)
 endif()
 
 if(TARGET Luau.Web)

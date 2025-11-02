@@ -4,6 +4,7 @@
 #include "Luau/Ast.h"
 #include "Luau/AstUtils.h"
 #include "Luau/AstQuery.h"
+#include "Luau/BuiltinDefinitions.h"
 #include "Luau/Common.h"
 #include "Luau/DcrLogger.h"
 #include "Luau/DenseHash.h"
@@ -33,21 +34,20 @@
 
 LUAU_FASTFLAG(DebugLuauMagicTypes)
 
-LUAU_FASTFLAG(LuauReturnMappedGenericPacksFromSubtyping2)
-LUAU_FASTFLAG(LuauInferActualIfElseExprType2)
 LUAU_FASTFLAG(LuauNoMoreComparisonTypeFunctions)
 LUAU_FASTFLAG(LuauTrackUniqueness)
-LUAU_FASTFLAG(LuauNameConstraintRestrictRecursiveTypes)
-LUAU_FASTFLAG(LuauSubtypingGenericPacksDoesntUseVariance)
 
 LUAU_FASTFLAGVARIABLE(LuauIceLess)
 LUAU_FASTFLAG(LuauExplicitSkipBoundTypes)
-LUAU_FASTFLAGVARIABLE(LuauAllowMixedTables)
 LUAU_FASTFLAGVARIABLE(LuauSimplifyIntersectionForLiteralSubtypeCheck)
-LUAU_FASTFLAGVARIABLE(LuauRemoveGenericErrorForParams)
 LUAU_FASTFLAG(LuauNoConstraintGenRecursionLimitIce)
 LUAU_FASTFLAGVARIABLE(LuauAddErrorCaseForIncompatibleTypePacks)
 LUAU_FASTFLAGVARIABLE(LuauAddConditionalContextForTernary)
+LUAU_FASTFLAGVARIABLE(LuauCheckForInWithSubtyping2)
+LUAU_FASTFLAGVARIABLE(LuauNoOrderingTypeFunctions)
+LUAU_FASTFLAG(LuauPassBindableGenericsByReference)
+LUAU_FASTFLAG(LuauSimplifyIntersectionNoTreeSet)
+LUAU_FASTFLAG(LuauAddRefinementToAssertions)
 
 namespace Luau
 {
@@ -740,10 +740,7 @@ void TypeChecker2::visit(AstStatReturn* ret)
     {
         if (idx < head.size())
         {
-            if (FFlag::LuauInferActualIfElseExprType2)
-                isSubtype &= testLiteralOrAstTypeIsSubtype(ret->list.data[idx], head[idx]);
-            else
-                isSubtype &= testPotentialLiteralIsSubtype(ret->list.data[idx], head[idx]);
+            isSubtype &= testLiteralOrAstTypeIsSubtype(ret->list.data[idx], head[idx]);
             actualHead.push_back(head[idx]);
         }
         else
@@ -774,10 +771,7 @@ void TypeChecker2::visit(AstStatReturn* ret)
     else
     {
         auto lastType = head[ret->list.size - 1];
-        if (FFlag::LuauInferActualIfElseExprType2)
-            isSubtype &= testLiteralOrAstTypeIsSubtype(lastExpr, lastType);
-        else
-            isSubtype &= testPotentialLiteralIsSubtype(lastExpr, lastType);
+        isSubtype &= testLiteralOrAstTypeIsSubtype(lastExpr, lastType);
         actualHead.push_back(lastType);
     }
 
@@ -996,10 +990,16 @@ void TypeChecker2::visit(AstStatForIn* forInStatement)
                 reportError(GenericError{"__iter metamethod's next() function does not return enough values"}, getLocation(forInStatement->values));
             else
                 reportError(GenericError{"next() does not return enough values"}, forInStatement->values.data[0]->location);
+
+            if (FFlag::LuauCheckForInWithSubtyping2)
+                return;
         }
 
-        for (size_t i = 0; i < std::min(expectedVariableTypes.head.size(), variableTypes.size()); ++i)
-            testIsSubtype(variableTypes[i], expectedVariableTypes.head[i], forInStatement->vars.data[i]->location);
+        if (!FFlag::LuauCheckForInWithSubtyping2)
+        {
+            for (size_t i = 0; i < std::min(expectedVariableTypes.head.size(), variableTypes.size()); ++i)
+                testIsSubtype(variableTypes[i], expectedVariableTypes.head[i], forInStatement->vars.data[i]->location);
+        }
 
         // nextFn is going to be invoked with (arrayTy, startIndexTy)
 
@@ -1029,27 +1029,61 @@ void TypeChecker2::visit(AstStatForIn* forInStatement)
                 reportError(GenericError{"__iter metamethod must return (next[, table[, state]])"}, getLocation(forInStatement->values));
             else
                 reportError(CountMismatch{2, std::nullopt, firstIterationArgCount, CountMismatch::Arg}, forInStatement->values.data[0]->location);
-        }
 
+            if (FFlag::LuauCheckForInWithSubtyping2)
+                return;
+        }
         else if (actualArgCount < minCount)
         {
             if (isMm)
                 reportError(GenericError{"__iter metamethod must return (next[, table[, state]])"}, getLocation(forInStatement->values));
             else
                 reportError(CountMismatch{2, std::nullopt, firstIterationArgCount, CountMismatch::Arg}, forInStatement->values.data[0]->location);
+
+            if (FFlag::LuauCheckForInWithSubtyping2)
+                return;
         }
 
-
-        if (iterTys.size() >= 2 && flattenedArgTypes.head.size() > 0)
+        if (FFlag::LuauCheckForInWithSubtyping2)
         {
-            size_t valueIndex = forInStatement->values.size > 1 ? 1 : 0;
-            testIsSubtype(iterTys[1], flattenedArgTypes.head[0], forInStatement->values.data[valueIndex]->location);
+            const TypeId iterFunc = follow(iterTys[0]);
+
+            std::vector<TypeId> prospectiveArgTypes = std::vector(iterTys.begin() + 1, iterTys.end());
+            // Right pad with nils if needed
+            if (const TypePack* iterFuncArgs = get<TypePack>(follow(iterFtv->argTypes));
+                iterFuncArgs && iterFuncArgs->head.size() > prospectiveArgTypes.size())
+                prospectiveArgTypes.resize(iterFuncArgs->head.size(), builtinTypes->nilType);
+            const TypePackId prospectiveArgs = arena.addTypePack(prospectiveArgTypes, std::nullopt);
+
+            std::vector<TypeId> prospectiveRetTypes = {};
+            if (variableTypes.size() > 0) // Type inference intersects the control variable with ~nil, so we make it optional here
+                prospectiveRetTypes.emplace_back(arena.addType(UnionType{{variableTypes[0], builtinTypes->nilType}}));
+            if (variableTypes.size() > 1)
+                prospectiveRetTypes.emplace_back(variableTypes[1]);
+            // Right pad with anys, since not all the return values are used (eg for key in pairs(t))
+            if (const TypePack* iterFuncRets = get<TypePack>(follow(iterFtv->retTypes));
+                iterFuncRets && iterFuncRets->head.size() > prospectiveRetTypes.size())
+                prospectiveRetTypes.resize(iterFuncRets->head.size(), builtinTypes->anyType);
+            // Add a variadic any tail because sometimes iterFunc returns a variadic pack (see forin_metatable_iter_mm)
+            const TypePackId prospectiveRets = arena.addTypePack(prospectiveRetTypes, builtinTypes->anyTypePack);
+
+            const TypeId prospectiveFunction = arena.addType(FunctionType{prospectiveArgs, prospectiveRets, std::nullopt, isMm});
+
+            testIsSubtypeForInStat(iterFunc, prospectiveFunction, *forInStatement);
         }
-
-        if (iterTys.size() == 3 && flattenedArgTypes.head.size() > 1)
+        else
         {
-            size_t valueIndex = forInStatement->values.size > 2 ? 2 : 0;
-            testIsSubtype(iterTys[2], flattenedArgTypes.head[1], forInStatement->values.data[valueIndex]->location);
+            if (iterTys.size() >= 2 && flattenedArgTypes.head.size() > 0)
+            {
+                size_t valueIndex = forInStatement->values.size > 1 ? 1 : 0;
+                testIsSubtype(iterTys[1], flattenedArgTypes.head[0], forInStatement->values.data[valueIndex]->location);
+            }
+
+            if (iterTys.size() == 3 && flattenedArgTypes.head.size() > 1)
+            {
+                size_t valueIndex = forInStatement->values.size > 2 ? 2 : 0;
+                testIsSubtype(iterTys[2], flattenedArgTypes.head[1], forInStatement->values.data[valueIndex]->location);
+            }
         }
     };
 
@@ -1290,13 +1324,10 @@ void TypeChecker2::visit(AstStatTypeAlias* stat)
     if (!module->astScopes.contains(stat))
         return;
 
-    if (FFlag::LuauNameConstraintRestrictRecursiveTypes)
+    if (const Scope* scope = findInnermostScope(stat->location))
     {
-        if (const Scope* scope = findInnermostScope(stat->location))
-        {
-            if (scope->isInvalidTypeAliasName(stat->name.value))
-                reportError(RecursiveRestraintViolation{}, stat->location);
-        }
+        if (scope->isInvalidTypeAliasName(stat->name.value))
+            reportError(RecursiveRestraintViolation{}, stat->location);
     }
 
     visitGenerics(stat->generics, stat->genericPacks);
@@ -1731,13 +1762,36 @@ void TypeChecker2::visitCall(AstExprCall* call)
 
 void TypeChecker2::visit(AstExprCall* call)
 {
+    std::optional<InConditionalContext> flipper;
+    if (FFlag::LuauAddRefinementToAssertions)
+    {
+        // We want to preserve the existing conditional context if we are in a `typeof` call.
+        if (!matchTypeOf(*call))
+            flipper.emplace(&typeContext, TypeContext::Default);
+
+        visit(call->func, ValueContext::RValue);
+    }
+    else
     {
         InConditionalContext flipper(&typeContext, TypeContext::Default);
         visit(call->func, ValueContext::RValue);
     }
 
-    for (AstExpr* arg : call->args)
-        visit(arg, ValueContext::RValue);
+    if (FFlag::LuauAddRefinementToAssertions && matchAssert(*call) && call->args.size > 0)
+    {
+        {
+            InConditionalContext flipper(&typeContext);
+            visit(call->args.data[0], ValueContext::RValue);
+        }
+
+        for (size_t i = 1; i < call->args.size; ++i)
+            visit(call->args.data[i], ValueContext::RValue);
+    }
+    else
+    {
+        for (AstExpr* arg : call->args)
+            visit(arg, ValueContext::RValue);
+    }
 
     visitCall(call);
 }
@@ -2154,7 +2208,7 @@ static bool isOkToCompare(
 
     // Comparison with never is always ok.
     else if (NormalizationResult::True != normalizer.isInhabited(normLeft.get()) ||
-                NormalizationResult::True != normalizer.isInhabited(normRight.get()))
+             NormalizationResult::True != normalizer.isInhabited(normRight.get()))
         return true;
 
     // Comparisons between different string singleton types is allowed even
@@ -2390,16 +2444,23 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
             {
                 if (isComparison)
                 {
-                    reportError(
-                        GenericError{format(
-                            "Types '%s' and '%s' cannot be compared with %s because neither type's metatable has a '%s' metamethod",
-                            toString(leftType).c_str(),
-                            toString(rightType).c_str(),
-                            toString(expr->op).c_str(),
-                            it->second
-                        )},
-                        expr->location
-                    );
+                    if (FFlag::LuauNoOrderingTypeFunctions)
+                    {
+                        reportError(CannotCompareUnrelatedTypes{leftType, rightType, expr->op}, expr->location);
+                    }
+                    else
+                    {
+                        reportError(
+                            GenericError{format(
+                                "Types '%s' and '%s' cannot be compared with %s because neither type's metatable has a '%s' metamethod",
+                                toString(leftType).c_str(),
+                                toString(rightType).c_str(),
+                                toString(expr->op).c_str(),
+                                it->second
+                            )},
+                            expr->location
+                        );
+                    }
                 }
                 else
                 {
@@ -2421,15 +2482,22 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
             {
                 if (isComparison)
                 {
-                    reportError(
-                        GenericError{format(
-                            "Types '%s' and '%s' cannot be compared with %s because neither type has a metatable",
-                            toString(leftType).c_str(),
-                            toString(rightType).c_str(),
-                            toString(expr->op).c_str()
-                        )},
-                        expr->location
-                    );
+                    if (FFlag::LuauNoOrderingTypeFunctions)
+                    {
+                        reportError(CannotCompareUnrelatedTypes{leftType, rightType, expr->op}, expr->location);
+                    }
+                    else
+                    {
+                        reportError(
+                            GenericError{format(
+                                "Types '%s' and '%s' cannot be compared with %s because neither type has a metatable",
+                                toString(leftType).c_str(),
+                                toString(rightType).c_str(),
+                                toString(expr->op).c_str()
+                            )},
+                            expr->location
+                        );
+                    }
                 }
                 else
                 {
@@ -2481,16 +2549,37 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
         if (normLeft && normalizer.isInhabited(normLeft.get()) == NormalizationResult::False)
             return builtinTypes->booleanType;
 
-        if (normLeft && normLeft->isExactlyNumber())
+        if (FFlag::LuauNoOrderingTypeFunctions)
         {
-            testIsSubtype(rightType, builtinTypes->numberType, expr->right->location);
-            return builtinTypes->booleanType;
-        }
+            // This could be a little wasteful, as we already have normalized
+            // types, but correctly handles cases like `_: (T & number) <= _: (T & number)`.
 
-        if (normLeft && normLeft->isSubtypeOfString())
+            if (subtyping->isSubtype(leftType, builtinTypes->numberType, scope).isSubtype)
+            {
+                testIsSubtype(rightType, builtinTypes->numberType, expr->right->location);
+                return builtinTypes->booleanType;
+            }
+
+            if (subtyping->isSubtype(leftType, builtinTypes->stringType, scope).isSubtype)
+            {
+                testIsSubtype(rightType, builtinTypes->stringType, expr->right->location);
+                return builtinTypes->booleanType;
+            }
+        }
+        else
         {
-            testIsSubtype(rightType, builtinTypes->stringType, expr->right->location);
-            return builtinTypes->booleanType;
+
+            if (normLeft && normLeft->isExactlyNumber())
+            {
+                testIsSubtype(rightType, builtinTypes->numberType, expr->right->location);
+                return builtinTypes->booleanType;
+            }
+
+            if (normLeft && normLeft->isSubtypeOfString())
+            {
+                testIsSubtype(rightType, builtinTypes->stringType, expr->right->location);
+                return builtinTypes->booleanType;
+            }
         }
 
         reportError(
@@ -2702,35 +2791,6 @@ void TypeChecker2::visit(AstTypeReference* ty)
         size_t typesRequired = alias->typeParams.size();
         size_t packsRequired = alias->typePackParams.size();
 
-        bool hasDefaultTypes = std::any_of(
-            alias->typeParams.begin(),
-            alias->typeParams.end(),
-            [](auto&& el)
-            {
-                return el.defaultValue.has_value();
-            }
-        );
-
-        bool hasDefaultPacks = std::any_of(
-            alias->typePackParams.begin(),
-            alias->typePackParams.end(),
-            [](auto&& el)
-            {
-                return el.defaultValue.has_value();
-            }
-        );
-
-        if (!FFlag::LuauRemoveGenericErrorForParams)
-        {
-            if (!ty->hasParameterList)
-            {
-                if ((!alias->typeParams.empty() && !hasDefaultTypes) || (!alias->typePackParams.empty() && !hasDefaultPacks))
-                {
-                    reportError(GenericError{"Type parameter list is required"}, ty->location);
-                }
-            }
-        }
-
         size_t typesProvided = 0;
         size_t extraTypes = 0;
         size_t packsProvided = 0;
@@ -2805,17 +2865,9 @@ void TypeChecker2::visit(AstTypeReference* ty)
             }
         }
 
-        if (FFlag::LuauRemoveGenericErrorForParams)
-        {
-            // If the type parameter list is explicitly provided, allow an empty type pack to satisfy the expected pack count.
-            if (extraTypes == 0 && packsProvided + 1 == packsRequired && ty->hasParameterList)
-                packsProvided += 1;
-        }
-        else
-        {
-            if (extraTypes == 0 && packsProvided + 1 == packsRequired)
-                packsProvided += 1;
-        }
+        // If the type parameter list is explicitly provided, allow an empty type pack to satisfy the expected pack count.
+        if (extraTypes == 0 && packsProvided + 1 == packsRequired && ty->hasParameterList)
+            packsProvided += 1;
 
         if (typesProvided != typesRequired || packsProvided != packsRequired)
         {
@@ -2956,22 +3008,9 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
         if (reasoning.subPath.empty() && reasoning.superPath.empty())
             continue;
 
-        std::optional<TypeOrPack> optSubLeaf;
-        if (FFlag::LuauSubtypingGenericPacksDoesntUseVariance)
-            optSubLeaf = traverse(subTy, reasoning.subPath, builtinTypes, subtyping->arena);
-        else if (FFlag::LuauReturnMappedGenericPacksFromSubtyping2)
-            optSubLeaf = traverse_DEPRECATED(subTy, reasoning.subPath, builtinTypes, NotNull{&r.mappedGenericPacks_DEPRECATED}, subtyping->arena);
-        else
-            optSubLeaf = traverse_DEPRECATED(subTy, reasoning.subPath, builtinTypes);
+        std::optional<TypeOrPack> optSubLeaf = traverse(subTy, reasoning.subPath, builtinTypes, subtyping->arena);
 
-        std::optional<TypeOrPack> optSuperLeaf;
-        if (FFlag::LuauSubtypingGenericPacksDoesntUseVariance)
-            optSuperLeaf = traverse(superTy, reasoning.superPath, builtinTypes, subtyping->arena);
-        else if (FFlag::LuauReturnMappedGenericPacksFromSubtyping2)
-            optSuperLeaf =
-                traverse_DEPRECATED(superTy, reasoning.superPath, builtinTypes, NotNull{&r.mappedGenericPacks_DEPRECATED}, subtyping->arena);
-        else
-            optSuperLeaf = traverse_DEPRECATED(superTy, reasoning.superPath, builtinTypes);
+        std::optional<TypeOrPack> optSuperLeaf = traverse(superTy, reasoning.superPath, builtinTypes, subtyping->arena);
 
         if (!optSubLeaf || !optSuperLeaf)
         {
@@ -3119,29 +3158,26 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
     auto exprType = follow(lookupType(expr));
     expectedType = follow(expectedType);
 
-    if (FFlag::LuauInferActualIfElseExprType2)
+    if (auto group = expr->as<AstExprGroup>())
     {
-        if (auto group = expr->as<AstExprGroup>())
-        {
-            return testPotentialLiteralIsSubtype(group->expr, expectedType);
-        }
-        else if (auto ifElse = expr->as<AstExprIfElse>())
-        {
-            bool passes = testPotentialLiteralIsSubtype(ifElse->trueExpr, expectedType);
-            passes &= testPotentialLiteralIsSubtype(ifElse->falseExpr, expectedType);
-            return passes;
-        }
-        else if (auto binExpr = expr->as<AstExprBinary>(); binExpr && binExpr->op == AstExprBinary::Or)
-        {
-            // In this case: `{ ... } or { ... }` is literal _enough_ that
-            // we should do this covariant check.
-            auto relaxedExpectedLhs = module->internalTypes.addType(UnionType{{builtinTypes->falsyType, expectedType}});
-            bool passes = testPotentialLiteralIsSubtype(binExpr->left, relaxedExpectedLhs);
-            passes &= testPotentialLiteralIsSubtype(binExpr->right, expectedType);
-            return passes;
-        }
-        // FIXME: We probably should do a check for `and` here.
+        return testPotentialLiteralIsSubtype(group->expr, expectedType);
     }
+    else if (auto ifElse = expr->as<AstExprIfElse>())
+    {
+        bool passes = testPotentialLiteralIsSubtype(ifElse->trueExpr, expectedType);
+        passes &= testPotentialLiteralIsSubtype(ifElse->falseExpr, expectedType);
+        return passes;
+    }
+    else if (auto binExpr = expr->as<AstExprBinary>(); binExpr && binExpr->op == AstExprBinary::Or)
+    {
+        // In this case: `{ ... } or { ... }` is literal _enough_ that
+        // we should do this covariant check.
+        auto relaxedExpectedLhs = module->internalTypes.addType(UnionType{{builtinTypes->falsyType, expectedType}});
+        bool passes = testPotentialLiteralIsSubtype(binExpr->left, relaxedExpectedLhs);
+        passes &= testPotentialLiteralIsSubtype(binExpr->right, expectedType);
+        return passes;
+    }
+    // FIXME: We probably should do a check for `and` here.
 
     auto exprTable = expr->as<AstExprTable>();
     auto exprTableType = get<TableType>(exprType);
@@ -3171,10 +3207,22 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
             {
                 // If we _happen_ to have an intersection of tables, let's try to
                 // construct it and use it as the input to this algorithm.
-                std::set<TypeId> parts{begin(itv), end(itv)};
-                TypeId simplified = simplifyIntersection(builtinTypes, NotNull{&module->internalTypes}, std::move(parts)).result;
-                if (is<TableType>(simplified))
-                    return testPotentialLiteralIsSubtype(expr, simplified);
+                if (FFlag::LuauSimplifyIntersectionNoTreeSet)
+                {
+                    TypeIds parts;
+                    parts.insert(begin(itv), end(itv));
+                    TypeId simplified = simplifyIntersection(builtinTypes, NotNull{&module->internalTypes}, std::move(parts)).result;
+                    if (is<TableType>(simplified))
+                        return testPotentialLiteralIsSubtype(expr, simplified);
+                }
+                else
+                {
+
+                    std::set<TypeId> parts{begin(itv), end(itv)};
+                    TypeId simplified = simplifyIntersection_DEPRECATED(builtinTypes, NotNull{&module->internalTypes}, std::move(parts)).result;
+                    if (is<TableType>(simplified))
+                        return testPotentialLiteralIsSubtype(expr, simplified);
+                }
             }
         }
 
@@ -3196,16 +3244,8 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
     {
         NotNull<Scope> scope{findInnermostScope(expr->location)};
 
-        if (FFlag::LuauAllowMixedTables)
-        {
-            auto result = subtyping->isSubtype(/* subTy */ builtinTypes->numberType, /* superTy */ expectedTableType->indexer->indexType, scope);
-            isArrayLike = result.isSubtype || isErrorSuppressing(expr->location, expectedTableType->indexer->indexType);
-        }
-        else
-        {
-            auto result = subtyping->isSubtype(/* subTy */ expectedTableType->indexer->indexType, /* superTy */ builtinTypes->numberType, scope);
-            isArrayLike = result.isSubtype;
-        }
+        auto result = subtyping->isSubtype(/* subTy */ builtinTypes->numberType, /* superTy */ expectedTableType->indexer->indexType, scope);
+        isArrayLike = result.isSubtype || isErrorSuppressing(expr->location, expectedTableType->indexer->indexType);
     }
 
     bool isSubtype = true;
@@ -3303,7 +3343,8 @@ bool TypeChecker2::testIsSubtype(TypeId subTy, TypeId superTy, Location location
 bool TypeChecker2::testIsSubtype(TypePackId subTy, TypePackId superTy, Location location)
 {
     NotNull<Scope> scope{findInnermostScope(location)};
-    SubtypingResult r = subtyping->isSubtype(subTy, superTy, scope);
+    SubtypingResult r = FFlag::LuauPassBindableGenericsByReference ? subtyping->isSubtype(subTy, superTy, scope, {})
+                                                                   : subtyping->isSubtype_DEPRECATED(subTy, superTy, scope);
 
     if (!isErrorSuppressing(location, subTy))
     {
@@ -3318,6 +3359,103 @@ bool TypeChecker2::testIsSubtype(TypePackId subTy, TypePackId superTy, Location 
         explainError(subTy, superTy, location, r);
 
     return r.isSubtype;
+}
+
+void TypeChecker2::maybeReportSubtypingError(const TypeId subTy, const TypeId superTy, const Location& location)
+{
+    LUAU_ASSERT(FFlag::LuauCheckForInWithSubtyping2);
+    switch (shouldSuppressErrors(NotNull{&normalizer}, subTy).orElse(shouldSuppressErrors(NotNull{&normalizer}, superTy)))
+    {
+    case ErrorSuppression::Suppress:
+        return;
+    case ErrorSuppression::NormalizationFailed:
+        reportError(NormalizationTooComplex{}, location);
+        break;
+    case ErrorSuppression::DoNotSuppress:
+        break;
+    default:
+        break;
+    }
+
+    reportError(TypeMismatch{superTy, subTy}, location);
+}
+
+void TypeChecker2::testIsSubtypeForInStat(const TypeId iterFunc, const TypeId prospectiveFunc, const AstStatForIn& forInStat)
+{
+    LUAU_ASSERT(FFlag::LuauCheckForInWithSubtyping2);
+    LUAU_ASSERT(get<FunctionType>(follow(iterFunc)));
+    LUAU_ASSERT(get<FunctionType>(follow(prospectiveFunc)));
+
+    const Location& iterFuncLocation = forInStat.values.data[0]->location;
+
+    const NotNull<Scope> scope{findInnermostScope(iterFuncLocation)};
+    SubtypingResult r = subtyping->isSubtype(iterFunc, prospectiveFunc, scope);
+
+    if (!isErrorSuppressing(iterFuncLocation, iterFunc))
+    {
+        for (auto& e : r.errors)
+            e.location = iterFuncLocation;
+    }
+    reportErrors(std::move(r.errors));
+
+    if (r.normalizationTooComplex)
+        reportError(NormalizationTooComplex{}, iterFuncLocation);
+
+    if (r.isSubtype)
+        return;
+
+    for (auto& reasoning : r.reasoning)
+    {
+        // We can give more specific errors if superPath reasoning is of form [Arguments|Returns, PackIndex[n]]
+        if (reasoning.subPath.empty() || reasoning.superPath.components.size() != 2)
+        {
+            maybeReportSubtypingError(prospectiveFunc, iterFunc, iterFuncLocation);
+            return;
+        }
+
+        const TypePath::PackField* pf = get_if<TypePath::PackField>(&reasoning.superPath.components[0]);
+
+        if (!pf || *pf == TypePath::PackField::Tail)
+        {
+            maybeReportSubtypingError(prospectiveFunc, iterFunc, iterFuncLocation);
+            return;
+        }
+
+        const TypePath::Index* index = get_if<TypePath::Index>(&reasoning.superPath.components[1]);
+        if (!index || index->variant != TypePath::Index::Variant::Pack)
+        {
+            maybeReportSubtypingError(prospectiveFunc, iterFunc, iterFuncLocation);
+            return;
+        }
+
+        std::optional<TypeId> subLeaf = traverseForType(iterFunc, reasoning.subPath, builtinTypes, subtyping->arena);
+        if (!subLeaf)
+            continue;
+
+        std::optional<TypeId> superLeaf = traverseForType(prospectiveFunc, reasoning.superPath, builtinTypes, subtyping->arena);
+        if (!superLeaf)
+            continue;
+
+        if (*pf == TypePath::PackField::Arguments)
+        {
+            // The first component of `forInStat.values` is the iterator function itself
+            Location loc = index->index + 1 >= forInStat.values.size
+                               ? iterFuncLocation
+                               : forInStat.values.data[index->index + 1]->location;
+            maybeReportSubtypingError(*subLeaf, *superLeaf, loc);
+        }
+        else if (*pf == TypePath::PackField::Returns)
+        {
+            Location loc = index->index > forInStat.vars.size ? iterFuncLocation : forInStat.vars.data[index->index]->location;
+            maybeReportSubtypingError(*subLeaf, *superLeaf, loc);
+        }
+        else
+        {
+            LUAU_ASSERT(!"Unknown PackField type");
+            maybeReportSubtypingError(prospectiveFunc, iterFunc, iterFuncLocation);
+            return;
+        }
+    }
 }
 
 void TypeChecker2::reportError(TypeErrorData data, const Location& location)

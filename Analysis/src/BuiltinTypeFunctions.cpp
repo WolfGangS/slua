@@ -20,15 +20,16 @@
 LUAU_FASTFLAG(DebugLuauEqSatSimplification)
 LUAU_DYNAMIC_FASTINT(LuauTypeFamilyApplicationCartesianProductLimit)
 LUAU_DYNAMIC_FASTINTVARIABLE(LuauStepRefineRecursionLimit, 64)
-LUAU_FASTFLAGVARIABLE(LuauRefineOccursCheckDirectRecursion)
 LUAU_FASTFLAG(LuauReduceSetTypeStackPressure)
 
 LUAU_FASTFLAGVARIABLE(LuauRefineNoRefineAlways)
 LUAU_FASTFLAGVARIABLE(LuauRefineDistributesOverUnions)
 LUAU_FASTFLAG(LuauEGFixGenericsList)
 LUAU_FASTFLAG(LuauExplicitSkipBoundTypes)
-LUAU_FASTFLAG(LuauRawGetHandlesNil)
 LUAU_FASTFLAG(LuauNoMoreComparisonTypeFunctions)
+LUAU_FASTFLAGVARIABLE(LuauBuiltinTypeFunctionsArentGlobal)
+LUAU_FASTFLAG(LuauPassBindableGenericsByReference)
+LUAU_FASTFLAG(LuauEnqueueUnionsOfDistributedTypeFunctions)
 
 namespace Luau
 {
@@ -110,7 +111,10 @@ std::optional<TypeFunctionReductionResult<TypeId>> tryDistributeTypeFunctionApp(
 
         TypeId resultTy = ctx->arena->addType(
             TypeFunctionInstanceType{
-                NotNull{&builtinTypeFunctions().unionFunc},
+                NotNull{
+                    FFlag::LuauBuiltinTypeFunctionsArentGlobal ? &ctx->builtins->typeFunctions->unionFunc
+                                                               : &builtinTypeFunctions_DEPRECATED().unionFunc
+                },
                 std::move(results),
                 {},
             }
@@ -119,7 +123,10 @@ std::optional<TypeFunctionReductionResult<TypeId>> tryDistributeTypeFunctionApp(
         if (ctx->solver)
             ctx->pushConstraint(ReduceConstraint{resultTy});
 
-        return {{resultTy, Reduction::MaybeOk, {}, {}}};
+        if (FFlag::LuauEnqueueUnionsOfDistributedTypeFunctions)
+            return {{resultTy, Reduction::MaybeOk, {}, {}, {}, {}, {resultTy}}};
+        else
+            return {{resultTy, Reduction::MaybeOk, {}, {}}};
     }
 
     return std::nullopt;
@@ -238,7 +245,12 @@ TypeFunctionReductionResult<TypeId> lenTypeFunction(
         return {std::nullopt, Reduction::Erroneous, {}, {}}; // occurs check failed
 
     Subtyping subtyping{ctx->builtins, ctx->arena, ctx->simplifier, ctx->normalizer, ctx->typeFunctionRuntime, ctx->ice};
-    if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
+    if (FFlag::LuauPassBindableGenericsByReference)
+    {
+        if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope, {}).isSubtype)
+            return {std::nullopt, Reduction::Erroneous, {}, {}};
+    }
+    else if (!subtyping.isSubtype_DEPRECATED(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
         return {std::nullopt, Reduction::Erroneous, {}, {}};
 
     // `len` must return a `number`.
@@ -322,7 +334,13 @@ TypeFunctionReductionResult<TypeId> unmTypeFunction(
     if (!FFlag::LuauEGFixGenericsList)
     {
         Subtyping subtyping{ctx->builtins, ctx->arena, ctx->simplifier, ctx->normalizer, ctx->typeFunctionRuntime, ctx->ice};
-        if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
+        if (FFlag::LuauPassBindableGenericsByReference)
+        {
+            if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope, {}).isSubtype)
+                return {std::nullopt, Reduction::Erroneous, {}, {}};
+        }
+        else if (!subtyping.isSubtype_DEPRECATED(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope)
+                      .isSubtype) // TODO: is this the right variance?
             return {std::nullopt, Reduction::Erroneous, {}, {}};
     }
 
@@ -679,7 +697,12 @@ TypeFunctionReductionResult<TypeId> concatTypeFunction(
         return {std::nullopt, Reduction::Erroneous, {}, {}}; // occurs check failed
 
     Subtyping subtyping{ctx->builtins, ctx->arena, ctx->simplifier, ctx->normalizer, ctx->typeFunctionRuntime, ctx->ice};
-    if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
+    if (FFlag::LuauPassBindableGenericsByReference)
+    {
+        if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope, {}).isSubtype)
+            return {std::nullopt, Reduction::Erroneous, {}, {}};
+    }
+    else if (!subtyping.isSubtype_DEPRECATED(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
         return {std::nullopt, Reduction::Erroneous, {}, {}};
 
     return {ctx->builtins->stringType, Reduction::MaybeOk, {}, {}};
@@ -888,7 +911,12 @@ static TypeFunctionReductionResult<TypeId> comparisonTypeFunction(
         return {std::nullopt, Reduction::Erroneous, {}, {}}; // occurs check failed
 
     Subtyping subtyping{ctx->builtins, ctx->arena, ctx->simplifier, ctx->normalizer, ctx->typeFunctionRuntime, ctx->ice};
-    if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
+    if (FFlag::LuauPassBindableGenericsByReference)
+    {
+        if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope, {}).isSubtype)
+            return {std::nullopt, Reduction::Erroneous, {}, {}};
+    }
+    else if (!subtyping.isSubtype_DEPRECATED(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
         return {std::nullopt, Reduction::Erroneous, {}, {}};
 
     return {ctx->builtins->booleanType, Reduction::MaybeOk, {}, {}};
@@ -1017,7 +1045,12 @@ TypeFunctionReductionResult<TypeId> eqTypeFunction(
         return {std::nullopt, Reduction::Erroneous, {}, {}}; // occurs check failed
 
     Subtyping subtyping{ctx->builtins, ctx->arena, ctx->simplifier, ctx->normalizer, ctx->typeFunctionRuntime, ctx->ice};
-    if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
+    if (FFlag::LuauPassBindableGenericsByReference)
+    {
+        if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope, {}).isSubtype)
+            return {std::nullopt, Reduction::Erroneous, {}, {}};
+    }
+    else if (!subtyping.isSubtype_DEPRECATED(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
         return {std::nullopt, Reduction::Erroneous, {}, {}};
 
     return {ctx->builtins->booleanType, Reduction::MaybeOk, {}, {}};
@@ -1153,7 +1186,7 @@ struct RefineTypeScrubber : public Substitution
                     return true;
             }
         }
-        return FFlag::LuauRefineOccursCheckDirectRecursion ? ty == needle : false;
+        return ty == needle;
     }
 
     bool ignoreChildren(TypeId ty) override
@@ -1195,7 +1228,7 @@ struct RefineTypeScrubber : public Substitution
             else
                 return ctx->arena->addType(IntersectionType{newParts.take()});
         }
-        else if (FFlag::LuauRefineOccursCheckDirectRecursion && ty == needle)
+        else if (ty == needle)
             return ctx->builtins->unknownType;
         else
             return ty;
@@ -1575,11 +1608,23 @@ struct CollectUnionTypeOptions : TypeOnceVisitor
 
     bool visit(TypeId ty, const TypeFunctionInstanceType& tfit) override
     {
-        if (tfit.function->name != builtinTypeFunctions().unionFunc.name)
+        if (FFlag::LuauBuiltinTypeFunctionsArentGlobal)
         {
-            options.insert(ty);
-            blockingTypes.insert(ty);
-            return false;
+            if (tfit.function->name != ctx->builtins->typeFunctions->unionFunc.name)
+            {
+                options.insert(ty);
+                blockingTypes.insert(ty);
+                return false;
+            }
+        }
+        else
+        {
+            if (tfit.function->name != builtinTypeFunctions_DEPRECATED().unionFunc.name)
+            {
+                options.insert(ty);
+                blockingTypes.insert(ty);
+                return false;
+            }
         }
         return true;
     }
@@ -2031,8 +2076,16 @@ bool searchPropsAndIndexer(
         if (auto tfit = get<TypeFunctionInstanceType>(indexType))
         {
             // if we have an index function here, it means we're in a cycle, so let's see if it's well-founded if we tie the knot
-            if (tfit->function.get() == &builtinTypeFunctions().indexFunc)
-                indexType = follow(tblIndexer->indexResultType);
+            if (FFlag::LuauBuiltinTypeFunctionsArentGlobal)
+            {
+                if (tfit->function.get() == &ctx->builtins->typeFunctions->indexFunc)
+                    indexType = follow(tblIndexer->indexResultType);
+            }
+            else
+            {
+                if (tfit->function.get() == &builtinTypeFunctions_DEPRECATED().indexFunc)
+                    indexType = follow(tblIndexer->indexResultType);
+            }
         }
 
         if (isSubtype(ty, indexType, ctx->scope, ctx->builtins, ctx->simplifier, *ctx->ice, SolverMode::New))
@@ -2276,7 +2329,7 @@ TypeFunctionReductionResult<TypeId> indexFunctionImpl(
             for (TypeId ty : *typesToFind)
                 if (!tblIndexInto(ty, *tablesIter, properties, ctx, isRaw))
                 {
-                    if (FFlag::LuauRawGetHandlesNil && isRaw)
+                    if (isRaw)
                         properties.insert(ctx->builtins->nilType);
                     else
                         return {std::nullopt, Reduction::Erroneous, {}, {}};
@@ -2419,7 +2472,7 @@ static TypeFunctionReductionResult<TypeId> getmetatableHelper(TypeId targetTy, c
     std::optional<TypeId> result = std::nullopt;
     bool erroneous = true;
 
-    if (auto table = get<TableType>(targetTy))
+    if (get<TableType>(targetTy))
         erroneous = false;
 
     if (auto mt = get<MetatableType>(targetTy))
@@ -2677,7 +2730,8 @@ void BuiltinTypeFunctions::addToScope(NotNull<TypeArena> arena, NotNull<Scope> s
     scope->exportedTypeBindings[getmetatableFunc.name] = mkUnaryTypeFunction(&getmetatableFunc);
 }
 
-const BuiltinTypeFunctions& builtinTypeFunctions()
+
+const BuiltinTypeFunctions& builtinTypeFunctions_DEPRECATED()
 {
     static std::unique_ptr<const BuiltinTypeFunctions> result = std::make_unique<BuiltinTypeFunctions>();
 

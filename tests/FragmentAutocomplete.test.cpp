@@ -27,15 +27,10 @@ using namespace Luau;
 LUAU_FASTINT(LuauParseErrorLimit)
 
 LUAU_FASTFLAG(LuauBetterReverseDependencyTracking)
-LUAU_FASTFLAG(LuauSolverAgnosticStringification)
 LUAU_FASTFLAG(LuauFragmentRequiresCanBeResolvedToAModule)
-LUAU_FASTFLAG(LuauPopulateSelfTypesInFragment)
-LUAU_FASTFLAG(LuauParseIncompleteInterpStringsWithLocation)
-LUAU_FASTFLAG(LuauForInProvidesRecommendations)
-LUAU_FASTFLAG(LuauFragmentAutocompleteTakesInnermostRefinement)
-LUAU_FASTFLAG(LuauSuggestHotComments)
 LUAU_FASTFLAG(LuauNumericUnaryOpsDontProduceNegationRefinements)
 LUAU_FASTFLAG(LuauUnfinishedRepeatAncestryFix)
+LUAU_FASTFLAG(LuauForInRangesConsiderInLocation)
 
 static std::optional<AutocompleteEntryMap> nullCallback(std::string tag, std::optional<const ExternType*> ptr, std::optional<std::string> contents)
 {
@@ -64,9 +59,6 @@ template<class BaseType>
 struct FragmentAutocompleteFixtureImpl : BaseType
 {
     static_assert(std::is_base_of_v<Fixture, BaseType>, "BaseType must be a descendant of Fixture");
-
-    ScopedFastFlag sffLuauPopulateSelfTypesInFragment{FFlag::LuauPopulateSelfTypesInFragment, true};
-    ScopedFastFlag luauParseIncompleteInterpStringsWithLocation{FFlag::LuauParseIncompleteInterpStringsWithLocation, true};
 
     FragmentAutocompleteFixtureImpl()
         : BaseType(true)
@@ -766,7 +758,6 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "partial_for_numeric_in_condition")
 {
-    ScopedFastFlag sff{FFlag::LuauForInProvidesRecommendations, true};
     auto region = getAutocompleteRegion(
         R"(
 for c = 1,3
@@ -1613,7 +1604,6 @@ TEST_SUITE_BEGIN("FragmentAutocompleteTests");
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "multiple_fragment_autocomplete")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     ToStringOptions opt;
     opt.exhaustive = true;
     opt.exhaustive = true;
@@ -2990,7 +2980,6 @@ end)
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "fragment_autocomplete_ensures_memory_isolation")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     ToStringOptions opt;
     opt.exhaustive = true;
     opt.exhaustive = true;
@@ -4199,7 +4188,6 @@ local s = `{e.@1 }`
 
 TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "string_interpolation_format_provides_results_inside_of_function_call")
 {
-    ScopedFastFlag _{FFlag::LuauParseIncompleteInterpStringsWithLocation, true};
     const std::string source = R"(
 type T = {x : number, y : number, z : number}
 local e = {x = 1, y = 2, z = 3}
@@ -4227,7 +4215,6 @@ print(`{e.x} {e.@1}`)
 
 TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "for_in_should_rec")
 {
-    ScopedFastFlag sff{FFlag::LuauForInProvidesRecommendations, true};
     const std::string source = R"(
 type T = { x : {[number] : number}, y: number}
 local x : T = ({} :: T)
@@ -4249,7 +4236,6 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "for_expr_in_should_rec_no_do")
 {
-    ScopedFastFlag sff{FFlag::LuauForInProvidesRecommendations, true};
     const std::string source = R"(
 type T = { x : {[number] : number}, y: number, z: number}
 local x : T = ({} :: T)
@@ -4278,7 +4264,6 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "for_expr_in_should_rec_with_do_in_step")
 {
-    ScopedFastFlag sff{FFlag::LuauForInProvidesRecommendations, true};
     const std::string source = R"(
 type T = { x : {[number] : number}, y: number, z: number}
 local x : T = ({} :: T)
@@ -4307,7 +4292,6 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "for_expr_in_should_rec_with_do_in_max_delete")
 {
-    ScopedFastFlag sff{FFlag::LuauForInProvidesRecommendations, true};
     const std::string source = R"(
 type T = { x : {[number] : number}, y: number, z: number}
 local x : T = ({} :: T)
@@ -4336,7 +4320,6 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "for_expr_in_should_rec_with_do_in_max_add")
 {
-    ScopedFastFlag sff{FFlag::LuauForInProvidesRecommendations, true};
     const std::string source = R"(
 type T = { x : {[number] : number}, y: number, z: number}
 local x : T = ({} :: T)
@@ -4365,8 +4348,6 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "correctly_grab_innermost_refinement")
 {
-    ScopedFastFlag _{FFlag::LuauFragmentAutocompleteTakesInnermostRefinement, true};
-
     const std::string source = R"(
 --!strict
 type Type1 = { Type: "Type1", CommonKey: string, Type1Key: string }
@@ -4409,7 +4390,6 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "hot_comment_should_rec")
 {
-    ScopedFastFlag sff{FFlag::LuauSuggestHotComments, true};
     const std::string source = R"(--!@1)";
     autocompleteFragmentInBothSolvers(
         source,
@@ -4549,6 +4529,95 @@ local function whatever() end
     );
 }
 
+TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "in_place_edit_of_for_loop_before_in_keyword_returns_fragment_starting_from_for")
+{
+    ScopedFastFlag sff{FFlag::LuauForInRangesConsiderInLocation, true};
+    std::string source = R"(
+local x = {}
+for i, value in x do
+    print(i)
+end
+)";
+
+    std::string dest = R"(
+local x = {}
+for @1, value in x do
+    print(i)
+end
+)";
+    autocompleteFragmentInBothSolvers(
+        source,
+        dest,
+        '1',
+        [](auto& result)
+        {
+            CHECK(!result.result->acResults.entryMap.empty());
+        }
+    );
+}
+
+TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "bidirectionally_inferred_table_member")
+{
+    std::string source = R"(
+type Foo = { foo1: string, bar1: number }
+type Bar = { foo2: boolean, bar2: string }
+type Baz = { foo3: number, bar3: boolean }
+
+local X: Foo & Bar & Baz = {}
+)";
+
+    std::string dest = R"(
+type Foo = { foo1: string, bar1: number }
+type Bar = { foo2: boolean, bar2: string }
+type Baz = { foo3: number, bar3: boolean }
+
+local X: Foo & Bar & Baz = { f@1 }
+
+)";
+    autocompleteFragmentInBothSolvers(
+        source,
+        dest,
+        '1',
+        [](auto& result)
+        {
+            CHECK(!result.result->acResults.entryMap.empty());
+            CHECK(result.result->acResults.entryMap.count("foo1") > 0);
+            CHECK(result.result->acResults.entryMap.count("foo2") > 0);
+            CHECK(result.result->acResults.entryMap.count("foo3") > 0);
+        }
+    );
+}
+
+TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "oss_1850")
+{
+    std::string source = R"(
+type t = { name: "t", } | { name: "ts", person: "dog" }
+
+local t:t
+if t.name == "ts" then
+end
+    )";
+    std::string dest = R"(
+type t = { name: "t", } | { name: "ts", person: "dog" }
+
+local t:t
+if t.name == "ts" then
+    t.@1
+end
+    )";
+
+    autocompleteFragmentInBothSolvers(
+        source,
+        dest,
+        '1',
+        [](auto& result)
+        {
+            CHECK(!result.result->acResults.entryMap.empty());
+            CHECK(result.result->acResults.entryMap.count("name") > 0);
+            CHECK(result.result->acResults.entryMap.count("person") > 0);
+        }
+    );
+}
 
 // NOLINTEND(bugprone-unchecked-optional-access)
 

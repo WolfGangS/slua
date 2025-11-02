@@ -16,14 +16,12 @@
 
 #include <map>
 
+LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
+
 LUAU_FASTFLAG(LuauTraceTypesInNonstrictMode2)
 LUAU_FASTFLAG(LuauSetMetatableDoesNotTimeTravel)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
-LUAU_FASTFLAG(LuauIncludeBreakContinueStatements)
-LUAU_FASTFLAG(LuauSolverAgnosticStringification)
-LUAU_FASTFLAG(LuauSuggestHotComments)
 LUAU_FASTFLAG(LuauUnfinishedRepeatAncestryFix)
-LUAU_FASTFLAG(LuauParametrizedAttributeSyntax)
 LUAU_FASTFLAG(LuauAutocompleteAttributes)
 
 using namespace Luau;
@@ -1604,9 +1602,6 @@ return target(a.@1
 
 TEST_CASE_FIXTURE(ACFixture, "type_correct_suggestion_in_table")
 {
-    if (FFlag::LuauSolverV2) // CLI-116815 Autocomplete cannot suggest keys while autocompleting inside of a table
-        return;
-
     check(R"(
 type Foo = { a: number, b: string }
 local a = { one = 4, two = "hello" }
@@ -2203,7 +2198,6 @@ local abc = bar(@1)
 
 TEST_CASE_FIXTURE(ACFixture, "type_correct_sealed_table")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
 
     check(R"(
 local function f(a: { x: number, y: number }) return a.x + a.y end
@@ -3908,6 +3902,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_subtyping_recursion_limit")
         return;
 
     ScopedFastInt luauTypeInferRecursionLimit{FInt::LuauTypeInferRecursionLimit, 10};
+    ScopedFastInt luauSubtypingRecursionLimit{DFInt::LuauSubtypingRecursionLimit, 10};
 
     const int parts = 100;
     std::string source;
@@ -4723,8 +4718,6 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_via_bidirectional_self")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_include_break_continue_in_loop")
 {
-    ScopedFastFlag sff{FFlag::LuauIncludeBreakContinueStatements, true};
-
     check(R"(for x in y do
         @1
         if true then
@@ -4745,8 +4738,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_include_break_continue_in_loop")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_outside_loop")
 {
-    ScopedFastFlag sff{FFlag::LuauIncludeBreakContinueStatements, true};
-
     check(R"(@1if true then
         @2
     end)");
@@ -4763,8 +4754,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_outside_loop")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_function_boundary")
 {
-    ScopedFastFlag sff{FFlag::LuauIncludeBreakContinueStatements, true};
-
     check(R"(for i = 1, 10 do
     local function helper()
         @1
@@ -4779,8 +4768,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_function_bound
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_in_param")
 {
-    ScopedFastFlag sff{FFlag::LuauIncludeBreakContinueStatements, true};
-
     check(R"(while @1 do
         end)");
 
@@ -4792,8 +4779,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_in_param")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_incomplete_while")
 {
-    ScopedFastFlag sff{FFlag::LuauIncludeBreakContinueStatements, true};
-
     check("while @1");
 
     auto ac = autocomplete('1');
@@ -4804,8 +4789,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_incomplete_whi
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_incomplete_for")
 {
-    ScopedFastFlag sff{FFlag::LuauIncludeBreakContinueStatements, true};
-
     check("for @1 in @2 do");
 
     auto ac = autocomplete('1');
@@ -4821,8 +4804,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_incomplete_for
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_expr_func")
 {
-    ScopedFastFlag sff{FFlag::LuauIncludeBreakContinueStatements, true};
-
     check(R"(while true do
         local _ = function ()
         @1
@@ -4837,8 +4818,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_expr_func")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_include_break_continue_in_repeat")
 {
-    ScopedFastFlag sff{FFlag::LuauIncludeBreakContinueStatements, true};
-
     check(R"(repeat
         @1
     until foo())");
@@ -4851,8 +4830,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_include_break_continue_in_repeat")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_include_break_continue_in_nests")
 {
-    ScopedFastFlag sff{FFlag::LuauIncludeBreakContinueStatements, true};
-
     check(R"(while ((function ()
         while true do
             @1
@@ -4868,8 +4845,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_include_break_continue_in_nests")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_in_incomplete_loop")
 {
-    ScopedFastFlag sff{FFlag::LuauIncludeBreakContinueStatements, true};
-
     check(R"(while foo() do
         @1)");
 
@@ -4882,8 +4857,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_exclude_break_continue_in_incomplete_
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_suggest_hot_comments")
 {
-    ScopedFastFlag sff{FFlag::LuauSuggestHotComments, true};
-
     check("--!@1");
 
     auto ac = autocomplete('1');
@@ -4943,7 +4916,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_method_in_unfinished_while_body")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_attribute")
 {
-    ScopedFastFlag sff[]{{FFlag::LuauParametrizedAttributeSyntax, true}, {FFlag::LuauAutocompleteAttributes, true}};
+    ScopedFastFlag sff[]{{FFlag::LuauAutocompleteAttributes, true}};
 
     check(R"(
         \@@1
@@ -4958,7 +4931,7 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_attribute")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_deprecated_attribute")
 {
-    ScopedFastFlag sff[]{{FFlag::LuauParametrizedAttributeSyntax, true}, {FFlag::LuauAutocompleteAttributes, true}};
+    ScopedFastFlag sff[]{{FFlag::LuauAutocompleteAttributes, true}};
 
     check(R"(
         \@dep@1
@@ -4973,7 +4946,7 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_deprecated_attribute")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_braced_attribute")
 {
-    ScopedFastFlag sff[]{{FFlag::LuauParametrizedAttributeSyntax, true}, {FFlag::LuauAutocompleteAttributes, true}};
+    ScopedFastFlag sff[]{{FFlag::LuauAutocompleteAttributes, true}};
 
     check(R"(
         \@[@1]
@@ -4988,7 +4961,7 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_braced_attribute")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_deprecated_braced_attribute")
 {
-    ScopedFastFlag sff[]{{FFlag::LuauParametrizedAttributeSyntax, true}, {FFlag::LuauAutocompleteAttributes, true}};
+    ScopedFastFlag sff[]{{FFlag::LuauAutocompleteAttributes, true}};
 
     check(R"(
         \@[dep@1]

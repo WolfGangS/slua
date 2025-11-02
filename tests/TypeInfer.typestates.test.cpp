@@ -6,7 +6,6 @@
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuauRefineDistributesOverUnions)
 LUAU_FASTFLAG(LuauReduceSetTypeStackPressure)
-LUAU_FASTFLAG(LuauSolverAgnosticStringification)
 
 using namespace Luau;
 
@@ -123,6 +122,7 @@ TEST_CASE_FIXTURE(TypeStateFixture, "refine_a_local_and_then_assign_it")
 
     LUAU_REQUIRE_NO_ERRORS(result);
 }
+#endif
 
 TEST_CASE_FIXTURE(TypeStateFixture, "assign_a_local_and_then_refine_it")
 {
@@ -139,7 +139,6 @@ TEST_CASE_FIXTURE(TypeStateFixture, "assign_a_local_and_then_refine_it")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK("Type 'string' could not be converted into 'never'" == toString(result.errors[0]));
 }
-#endif
 
 TEST_CASE_FIXTURE(TypeStateFixture, "recursive_local_function")
 {
@@ -584,7 +583,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "oss_1547")
 
 TEST_CASE_FIXTURE(Fixture, "modify_captured_table_field")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     LUAU_REQUIRE_NO_ERRORS(check(R"(
         local state = { x = 0 }
         function incr()

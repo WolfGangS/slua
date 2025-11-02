@@ -20,10 +20,11 @@
 LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 
+LUAU_FASTFLAG(LuauIndividualRecursionLimits)
+LUAU_DYNAMIC_FASTINTVARIABLE(LuauUnifierRecursionLimit, 100)
+
 LUAU_FASTFLAG(LuauEmplaceNotPushBack)
 LUAU_FASTFLAGVARIABLE(LuauLimitUnification)
-LUAU_FASTFLAGVARIABLE(LuauUnifyShortcircuitSomeIntersectionsAndUnions)
-LUAU_FASTFLAGVARIABLE(LuauTryToOptimizeSetTypeUnification)
 LUAU_FASTFLAGVARIABLE(LuauFixNilRightPad)
 
 namespace Luau
@@ -111,7 +112,7 @@ Unifier2::Unifier2(NotNull<TypeArena> arena, NotNull<BuiltinTypes> builtinTypes,
     , scope(scope)
     , ice(ice)
     , limits(TypeCheckLimits{}) // TODO: typecheck limits in unifier2
-    , recursionLimit(FInt::LuauTypeInferRecursionLimit)
+    , recursionLimit(FFlag::LuauIndividualRecursionLimits ? DFInt::LuauUnifierRecursionLimit : FInt::LuauTypeInferRecursionLimit)
     , uninhabitedTypeFunctions(nullptr)
 {
 }
@@ -128,7 +129,7 @@ Unifier2::Unifier2(
     , scope(scope)
     , ice(ice)
     , limits(TypeCheckLimits{}) // TODO: typecheck limits in unifier2
-    , recursionLimit(FInt::LuauTypeInferRecursionLimit)
+    , recursionLimit(FFlag::LuauIndividualRecursionLimits ? DFInt::LuauUnifierRecursionLimit : FInt::LuauTypeInferRecursionLimit)
     , uninhabitedTypeFunctions(uninhabitedTypeFunctions)
 {
 }
@@ -211,67 +212,19 @@ UnifyResult Unifier2::unify_(TypeId subTy, TypeId superTy)
     if (subFn && superFn)
         return unify_(subTy, superFn);
 
-    if (FFlag::LuauTryToOptimizeSetTypeUnification)
-    {
-        auto subUnion = get<UnionType>(subTy);
-        auto superUnion = get<UnionType>(superTy);
+    auto subUnion = get<UnionType>(subTy);
+    auto superUnion = get<UnionType>(superTy);
+    if (subUnion)
+        return unify_(subUnion, superTy);
+    else if (superUnion)
+        return unify_(subTy, superUnion);
 
-        auto subIntersection = get<IntersectionType>(subTy);
-        auto superIntersection = get<IntersectionType>(superTy);
-
-        // This is, effectively, arranged to avoid the following:
-        //
-        //  'a & T <: U | V => 'a & T <: U and 'a & T <: V
-        //
-
-        // For T <: U & V and T | U <: V, these two cases are entirely correct.
-
-        // We decompose T <: U & V above into T <: U and T <: V ...
-        if (superIntersection)
-            return unify_(subTy, superIntersection);
-
-        // ... and T | U <: V into T <: V and U <: V.
-        if (subUnion)
-            return unify_(subUnion, superTy);
-
-        // This, T & U <: V, erroneously is decomposed into T <: U and T <: V,
-        // even though technically we only need one of the above to hold.
-        // However, this ordering means that we avoid ...
-        if (subIntersection)
-            return unify_(subIntersection, superTy);
-
-        // T <: U | V decomposing into T <: U and T <: V is incorrect, and
-        // can result in some really strange user-visible bugs. Consider:
-        //
-        //  'a & ~(false?) <: string | number
-        //
-        // Intuitively, this should place a constraint of `string | number`
-        // on the upper bound of `'a`. But if we hit this case, then we
-        // end up with something like:
-        //
-        //  'a & ~(false?) <: string and 'a & ~(false?) <: number
-        //
-        // ... which will result in `'a` having `string & number` as its
-        // upper bound, and being inferred to `never`.
-        if (superUnion)
-            return unify_(subTy, superUnion);
-    }
-    else
-    {
-        auto subUnion = get<UnionType>(subTy);
-        auto superUnion = get<UnionType>(superTy);
-        if (subUnion)
-            return unify_(subUnion, superTy);
-        else if (superUnion)
-            return unify_(subTy, superUnion);
-
-        auto subIntersection = get<IntersectionType>(subTy);
-        auto superIntersection = get<IntersectionType>(superTy);
-        if (subIntersection)
-            return unify_(subIntersection, superTy);
-        else if (superIntersection)
-            return unify_(subTy, superIntersection);
-    }
+    auto subIntersection = get<IntersectionType>(subTy);
+    auto superIntersection = get<IntersectionType>(superTy);
+    if (subIntersection)
+        return unify_(subIntersection, superTy);
+    else if (superIntersection)
+        return unify_(subTy, superIntersection);
 
     auto subNever = get<NeverType>(subTy);
     auto superNever = get<NeverType>(superTy);
@@ -446,15 +399,12 @@ UnifyResult Unifier2::unify_(const UnionType* subUnion, TypeId superTy)
 
 UnifyResult Unifier2::unify_(TypeId subTy, const UnionType* superUnion)
 {
-    if (FFlag::LuauUnifyShortcircuitSomeIntersectionsAndUnions)
+    subTy = follow(subTy);
+    // T <: T | U1 | U2 | ... | Un is trivially true, so we don't gain any information by unifying
+    for (const auto superOption : superUnion)
     {
-        subTy = follow(subTy);
-        // T <: T | U1 | U2 | ... | Un is trivially true, so we don't gain any information by unifying
-        for (const auto superOption : superUnion)
-        {
-            if (subTy == superOption)
-                return UnifyResult::Ok;
-        }
+        if (subTy == superOption)
+            return UnifyResult::Ok;
     }
 
     UnifyResult result = UnifyResult::Ok;
@@ -471,15 +421,12 @@ UnifyResult Unifier2::unify_(TypeId subTy, const UnionType* superUnion)
 
 UnifyResult Unifier2::unify_(const IntersectionType* subIntersection, TypeId superTy)
 {
-    if (FFlag::LuauUnifyShortcircuitSomeIntersectionsAndUnions)
+    superTy = follow(superTy);
+    // T & I1 & I2 & ... & In <: T is trivially true, so we don't gain any information by unifying
+    for (const auto subOption : subIntersection)
     {
-        superTy = follow(superTy);
-        // T & I1 & I2 & ... & In <: T is trivially true, so we don't gain any information by unifying
-        for (const auto subOption : subIntersection)
-        {
-            if (superTy == subOption)
-                return UnifyResult::Ok;
-        }
+        if (superTy == subOption)
+            return UnifyResult::Ok;
     }
 
     UnifyResult result = UnifyResult::Ok;
