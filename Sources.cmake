@@ -24,6 +24,7 @@ target_sources(Luau.Ast PRIVATE
     Ast/include/Luau/ParseOptions.h
     Ast/include/Luau/Parser.h
     Ast/include/Luau/ParseResult.h
+    Ast/include/Luau/PrettyPrinter.h
     Ast/include/Luau/StringUtils.h
     Ast/include/Luau/TimeTrace.h
 
@@ -34,6 +35,7 @@ target_sources(Luau.Ast PRIVATE
     Ast/src/Lexer.cpp
     Ast/src/Location.cpp
     Ast/src/Parser.cpp
+    Ast/src/PrettyPrinter.cpp
     Ast/src/StringUtils.cpp
     Ast/src/TimeTrace.cpp
 )
@@ -235,7 +237,6 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/ToDot.h
     Analysis/include/Luau/TopoSortStatements.h
     Analysis/include/Luau/ToString.h
-    Analysis/include/Luau/Transpiler.h
     Analysis/include/Luau/TxnLog.h
     Analysis/include/Luau/Type.h
     Analysis/include/Luau/TypeArena.h
@@ -310,7 +311,6 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/ToDot.cpp
     Analysis/src/TopoSortStatements.cpp
     Analysis/src/ToString.cpp
-    Analysis/src/Transpiler.cpp
     Analysis/src/TxnLog.cpp
     Analysis/src/Type.cpp
     Analysis/src/TypeArena.cpp
@@ -541,6 +541,7 @@ if(TARGET Luau.UnitTest)
         tests/NotNull.test.cpp
         tests/OverloadResolver.test.cpp
         tests/Parser.test.cpp
+        tests/PrettyPrinter.test.cpp
         tests/RegisterCallbacks.cpp
         tests/RegisterCallbacks.h
         tests/RequireTracer.test.cpp
@@ -554,7 +555,6 @@ if(TARGET Luau.UnitTest)
         tests/ToDot.test.cpp
         tests/TopoSort.test.cpp
         tests/ToString.test.cpp
-        tests/Transpiler.test.cpp
         tests/TxnLog.test.cpp
         tests/TypeFunction.test.cpp
         tests/TypeFunction.user.test.cpp
