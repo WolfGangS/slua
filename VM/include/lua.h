@@ -29,7 +29,9 @@ typedef void (*lua_setTimerEventCallback)(lua_State *L, double interval);
 // Clock provider should return monotonic stopwatch time in seconds.
 // Non-monotonic clocks may cause timer delays proportional to backward jumps.
 typedef double (*lua_clockProvider)(lua_State *L);
-typedef uint32_t (*lua_randomProvider)(lua_State *L);
+// This is strictly for future use by a CSPRNG hook where we need
+// _secure_ random values.
+typedef bool (*lua_randomProvider)(lua_State *L, uint8_t* dst, size_t len);
 
 // This is meant to be shared between instances of the same script and should
 // NOT have any instance-specific data on it!
