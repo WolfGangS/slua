@@ -1043,7 +1043,10 @@ static int lsl_tostring_quat(lua_State *L)
     if (a == nullptr)
         luaL_typeerror(L, 1, "quaternion");
 
-    lua_pushfstringL(L, "<%5.5f, %5.5f, %5.5f, %5.5f>", a[0], a[1], a[2], a[3]);
+    if (LUAU_IS_LSL_VM(L))
+        lua_pushfstringL(L, "<%5.5f, %5.5f, %5.5f, %5.5f>", a[0], a[1], a[2], a[3]);
+    else
+        lua_pushfstringL(L, "<%.6g, %.6g, %.6g, %.6g>", a[0], a[1], a[2], a[3]);
 
     return 1;
 }

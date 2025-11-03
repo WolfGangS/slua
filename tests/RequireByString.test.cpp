@@ -864,7 +864,7 @@ TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireVector")
     std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/types/vector";
     runProtectedRequire(path);
     // ServerLua: use our custom vector __tostring() result
-    assertOutputContainsAll({"true", "<1.00000, 2.00000, 3.00000>"});
+    assertOutputContainsAll({"true", "<1, 2, 3>"});
 }
 
 TEST_SUITE_END();

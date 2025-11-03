@@ -355,7 +355,10 @@ static int vector_mod(lua_State *L)
 static int vector_tostring(lua_State *L)
 {
     auto* a = luaL_checkvector(L, 1);
-    lua_pushfstringL(L, "<%5.5f, %5.5f, %5.5f>", a[0], a[1], a[2]);
+    if (LUAU_IS_LSL_VM(L))
+        lua_pushfstringL(L, "<%5.5f, %5.5f, %5.5f>", a[0], a[1], a[2]);
+    else
+        lua_pushfstringL(L, "<%.6g, %.6g, %.6g>", a[0], a[1], a[2]);
 
     return 1;
 }
