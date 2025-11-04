@@ -52,7 +52,7 @@ typedef struct SLTestRuntimeState : lua_SLRuntimeState
 
     // Flags for interrupt check testing
     bool interrupt_should_clear = false;
-    bool metamethod_ran = false;
+    bool callback_ran = false;
 } RuntimeState;
 
 
@@ -729,37 +729,53 @@ static int reset_interrupt_test(lua_State* L)
 {
     RuntimeState* state = (RuntimeState*)L->userdata;
     state->interrupt_should_clear = true;
-    state->metamethod_ran = false;
+    state->callback_ran = false;
     return 0;
 }
 
-static int check_metamethod_ran(lua_State* L)
+static int check_callback_ran(lua_State* L)
 {
     RuntimeState* state = (RuntimeState*)L->userdata;
-    lua_pushboolean(L, state->metamethod_ran);
+    lua_pushboolean(L, state->callback_ran);
     return 1;
 }
 
-static int test_metamethod(lua_State* L)
+static int test_callback(lua_State* L)
 {
     RuntimeState* state = (RuntimeState*)L->userdata;
 
     if (state->interrupt_should_clear)
     {
-        luaL_error(L, "Interrupt handler did not run before metamethod!");
+        luaL_error(L, "Interrupt handler did not run before callback!");
     }
 
-    state->metamethod_ran = true;
+    state->callback_ran = true;
     lua_pushstring(L, "ok");
     return 1;
 }
 
-TEST_CASE("Metamethods receive interrupt checks")
+static int test_sort_callback(lua_State* L)
 {
-    runConformance("metamethod_interrupts.lua", nullptr, [](lua_State* L) {
-        // Set up interrupt handler that clears the flag only for metamethod interrupts (-3)
+    RuntimeState* state = (RuntimeState*)L->userdata;
+
+    if (state->interrupt_should_clear)
+    {
+        luaL_error(L, "Interrupt handler did not run before sort comparison!");
+    }
+
+    state->callback_ran = true;
+    // `table.sort()` gets very angry if we don't do something that looks
+    // like sorting _eventually_
+    lua_pushboolean(L, lua_lessthan(L, 1, 2));
+    return 1;
+}
+
+TEST_CASE("Metamethods and library callbacks receive interrupt checks")
+{
+    runConformance("metamethod_and_callback_interrupts.lua", nullptr, [](lua_State* L) {
+        // Set up interrupt handler that clears the flag for metamethod (-3) and library callback (-4) interrupts
         lua_callbacks(L)->interrupt = [](lua_State* L, int gc) {
-            if (gc != -3)
+            if (gc != -3 && gc != -4)
                 return;
 
             RuntimeState* state = (RuntimeState*)L->userdata;
@@ -770,11 +786,14 @@ TEST_CASE("Metamethods receive interrupt checks")
         lua_pushcfunction(L, reset_interrupt_test, "reset_interrupt_test");
         lua_setglobal(L, "reset_interrupt_test");
 
-        lua_pushcfunction(L, check_metamethod_ran, "check_metamethod_ran");
-        lua_setglobal(L, "check_metamethod_ran");
+        lua_pushcfunction(L, check_callback_ran, "check_callback_ran");
+        lua_setglobal(L, "check_callback_ran");
 
-        lua_pushcfunction(L, test_metamethod, "test_metamethod");
-        lua_setglobal(L, "test_metamethod");
+        lua_pushcfunction(L, test_callback, "test_callback");
+        lua_setglobal(L, "test_callback");
+
+        lua_pushcfunction(L, test_sort_callback, "test_sort_callback");
+        lua_setglobal(L, "test_sort_callback");
     });
 }
 

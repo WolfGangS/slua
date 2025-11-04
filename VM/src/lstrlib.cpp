@@ -808,6 +808,8 @@ static void add_value(MatchState* ms, luaL_Strbuf* b, const char* s, const char*
         int n;
         lua_pushvalue(L, 3);
         n = push_captures(ms, s, e);
+        // ServerLua: Check for interrupt to allow pre-emptive abort before calling replacement function
+        luau_callinterrupthandler(L, -4);
         lua_call(L, n, 1);
         break;
     }
