@@ -279,6 +279,8 @@ int luaL_callmeta(lua_State* L, int obj, const char* event)
     if (!luaL_getmetafield(L, obj, event)) // no metafield?
         return 0;
     lua_pushvalue(L, obj);
+    // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
+    luau_callinterrupthandler(L, -3);
     lua_call(L, 1, 1);
     return 1;
 }

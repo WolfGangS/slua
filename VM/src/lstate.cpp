@@ -270,3 +270,20 @@ void luau_interruptoncalltail(lua_State *L)
         return;
     L->global->calltailinterruptcheck = 1;
 }
+
+// ServerLua: Call the interrupt handler directly if one is registered.
+// This allows pre-emptive abort of execution (e.g., before calling metamethods).
+void luau_callinterrupthandler(lua_State* L, int code)
+{
+    LUAU_ASSERT(code < 0); // Interrupt codes must be negative (>= 0 reserved for GC)
+
+    void (*interrupt)(lua_State*, int) = L->global->cb.interrupt;
+
+    if (LUAU_UNLIKELY(!!interrupt))
+    {
+        // this interrupt is not yieldable
+        L->nCcalls++;
+        interrupt(L, code);
+        L->nCcalls--;
+    }
+}

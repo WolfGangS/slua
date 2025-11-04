@@ -882,6 +882,8 @@ static int json_append_data(lua_State *l, json_config_t *cfg,
                 lua_pop(l, 2);
                 if (luaL_getmetafield(l, -1, "__tojson")) {
                     lua_pushvalue(l, -2);
+                    // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
+                    luau_callinterrupthandler(l, -3);
                     lua_call(l, 1, 1);
                     json_append_data(l, cfg, current_depth, json);
                     // Remove the original object
@@ -890,6 +892,8 @@ static int json_append_data(lua_State *l, json_config_t *cfg,
                 }
                 if (luaL_getmetafield(l, -1, "__len")) {
                     lua_pushvalue(l, -2);
+                    // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
+                    luau_callinterrupthandler(l, -3);
                     lua_call(l, 1, 1);
                     len = lua_tonumber(l, -1);
                     lua_pop(l, 1);
@@ -1019,7 +1023,7 @@ static int json_append_data(lua_State *l, json_config_t *cfg,
 class StrBufFreer
 {
 public:
-    StrBufFreer(strbuf_t *buf): mStrBuf(buf) {}
+    explicit StrBufFreer(strbuf_t *buf): mStrBuf(buf) {}
     ~StrBufFreer() {strbuf_free(mStrBuf);}
 protected:
     strbuf_t *mStrBuf;

@@ -49,6 +49,10 @@ typedef struct SLTestRuntimeState : lua_SLRuntimeState
     size_t max_mem = 0;
     size_t actual_size = 0;
     size_t approximate_size = 0;
+
+    // Flags for interrupt check testing
+    bool interrupt_should_clear = false;
+    bool metamethod_ran = false;
 } RuntimeState;
 
 
@@ -717,6 +721,60 @@ TEST_CASE("User thread alloc size calculation")
         lua_setglobal(L, "change_memcat");
 
         lua_callbacks(L)->beforeallocate = memoryLimitCallback;
+    });
+}
+
+// Helper functions for interrupt check testing
+static int reset_interrupt_test(lua_State* L)
+{
+    RuntimeState* state = (RuntimeState*)L->userdata;
+    state->interrupt_should_clear = true;
+    state->metamethod_ran = false;
+    return 0;
+}
+
+static int check_metamethod_ran(lua_State* L)
+{
+    RuntimeState* state = (RuntimeState*)L->userdata;
+    lua_pushboolean(L, state->metamethod_ran);
+    return 1;
+}
+
+static int test_metamethod(lua_State* L)
+{
+    RuntimeState* state = (RuntimeState*)L->userdata;
+
+    if (state->interrupt_should_clear)
+    {
+        luaL_error(L, "Interrupt handler did not run before metamethod!");
+    }
+
+    state->metamethod_ran = true;
+    lua_pushstring(L, "ok");
+    return 1;
+}
+
+TEST_CASE("Metamethods receive interrupt checks")
+{
+    runConformance("metamethod_interrupts.lua", nullptr, [](lua_State* L) {
+        // Set up interrupt handler that clears the flag only for metamethod interrupts (-3)
+        lua_callbacks(L)->interrupt = [](lua_State* L, int gc) {
+            if (gc != -3)
+                return;
+
+            RuntimeState* state = (RuntimeState*)L->userdata;
+            state->interrupt_should_clear = false;
+        };
+
+        // Register helper functions
+        lua_pushcfunction(L, reset_interrupt_test, "reset_interrupt_test");
+        lua_setglobal(L, "reset_interrupt_test");
+
+        lua_pushcfunction(L, check_metamethod_ran, "check_metamethod_ran");
+        lua_setglobal(L, "check_metamethod_ran");
+
+        lua_pushcfunction(L, test_metamethod, "test_metamethod");
+        lua_setglobal(L, "test_metamethod");
     });
 }
 
