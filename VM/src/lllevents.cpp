@@ -154,6 +154,7 @@ void luaSL_setup_detectedevent_metatable(lua_State *L)
     ADD_DETECTED_GETTER("getType", "DetectedType");
     ADD_DETECTED_GETTER("getVel", "DetectedVel");
     ADD_DETECTED_GETTER("getRezzer", "DetectedRezzer");
+    ADD_DETECTED_GETTER("getDamage", "DetectedDamage");
 
 #undef ADD_DETECTED_GETTER
 
