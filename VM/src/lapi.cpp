@@ -17,6 +17,7 @@
 #include "llsl.h"
 
 #include <string.h>
+#include <unordered_set>
 
 LUAU_FASTFLAG(LuauResumeFix)
 
@@ -1729,10 +1730,16 @@ lua_Alloc lua_getallocf(lua_State* L, void** ud)
     return f;
 }
 
+struct FixingContext
+{
+    std::unordered_set<lua_CFunction> safe_cfunctions;
+};
+
 // ServerLua: Additions for marking things that will always exist in the VM as "fixed".
 //  Functionally equivalent to Python's `gc.freeze()`.
 static bool gcfixingvisitor(void * context, lua_Page *page, GCObject *obj)
 {
+    FixingContext* ctx = static_cast<FixingContext*>(context);
     LUAU_ASSERT(iswhite(obj));
 
     switch(obj->gch.tt)
@@ -1752,14 +1759,26 @@ static bool gcfixingvisitor(void * context, lua_Page *page, GCObject *obj)
             // C closures are special in that upvalues on the closure instances are
             // unlikely to change. If they do, the runtime is at least in charge
             // of swapping out the upvalues so we can fix them if necessary.
+            bool has_unfixed_upvalues = false;
             for (int i=0; i<cl->nupvalues; ++i)
             {
                 TValue *uv = &cl->c.upvals[i];
                 if (iscollectable(uv) && !isfixed(gcvalue(uv)))
                 {
-                    // We don't want to fix a closure with un-fixed upvalues
+                    has_unfixed_upvalues = true;
+                    break;
+                }
+            }
+
+            if (has_unfixed_upvalues)
+            {
+                // Check if this is a known-safe function (like pairs/ipairs)
+                if (ctx->safe_cfunctions.find(cl->c.f) == ctx->safe_cfunctions.end())
+                {
+                    // Not a known-safe function, can't fix it
                     return false;
                 }
+                // Otherwise, it's a known-safe function, we'll allow fixing below
             }
         }
         else
@@ -1970,19 +1989,12 @@ CLANG_NOOPT void GCC_NOOPT lua_fixallcollectable(lua_State *L)
     // won't dynamically switch out the global env.
     LUAU_ASSERT(L->gt->safeenv);
 
-    // Fix all GCObjects that we know are fixable without any context
-    // as to what references them.
-    luaM_visitgco(L, L, gcfixingvisitor);
-
-    // Try to fix any userdata metatables we may know about
-    ASSERT_IN_DBG(try_fix_table(L->global->udatamt[UTAG_UUID]));
-    ASSERT_IN_DBG(try_fix_table(L->global->udatamt[UTAG_QUATERNION]));
-
-    // Do a second pass and only try to fix userdatas that we know have fixed metatables
-    luaM_visitgco(L, L, gcudatafixingvisitor);
+    // Create fixing context and populate it with known-safe C functions
+    FixingContext ctx;
 
     // Traverse direct referents of the global table while avoiding anything
     // that might invoke the GC, meaning most lua API calls must be avoided.
+    // Scan globals early to find pairs/ipairs and record their function pointers
     LuaTable *base_globals = L->gt;
     if (base_globals->metatable)
     {
@@ -1996,6 +2008,42 @@ CLANG_NOOPT void GCC_NOOPT lua_fixallcollectable(lua_State *L)
         LUAU_ASSERT(ttistable(index_val));
         base_globals = hvalue(index_val);
     }
+
+    for (int global_idx=0; global_idx<sizenode(base_globals); ++global_idx)
+    {
+        LuaNode *node = &base_globals->node[global_idx];
+        const TKey *key = gkey(node);
+        const TValue *global_val = gval(node);
+
+        if (!ttisstring(key))
+            continue;
+
+        const char *key_str = svalue(key);
+        if (!strcmp(key_str, "ipairs") || !strcmp(key_str, "pairs"))
+        {
+            // pairs and ipairs are special. They have upvalues, so we wouldn't
+            // normally fix them, but if we see them in the globals table we can
+            // be reasonably sure that they're the "real" ipairs and pairs, which
+            // should always have the same upvalues. They're okay to fix.
+            // The upvalues are also closures, but we expect that we've already fixed
+            // them, and that they won't be boxed in a GC'd `UpVal` object.
+            // Record their function pointers so gcfixingvisitor can recognize them.
+            if (ttisfunction(global_val) && clvalue(global_val)->isC)
+            {
+                ctx.safe_cfunctions.insert(clvalue(global_val)->c.f);
+            }
+        }
+    }
+
+    // Fix all GCObjects that we know are fixable, using context for pairs/ipairs
+    luaM_visitgco(L, &ctx, gcfixingvisitor);
+
+    // Try to fix any userdata metatables we may know about
+    ASSERT_IN_DBG(try_fix_table(L->global->udatamt[UTAG_UUID]));
+    ASSERT_IN_DBG(try_fix_table(L->global->udatamt[UTAG_QUATERNION]));
+
+    // Do a second pass and only try to fix userdatas that we know have fixed metatables
+    luaM_visitgco(L, L, gcudatafixingvisitor);
 
     // Now let's walk the globals table, scanning for things we can fix
     // Mostly, we're checking to see if we can fix tables related to
@@ -2026,18 +2074,7 @@ CLANG_NOOPT void GCC_NOOPT lua_fixallcollectable(lua_State *L)
 
         if (key_str)
         {
-            if (!strcmp(key_str, "ipairs") || !strcmp(key_str, "pairs"))
-            {
-                // pairs and ipairs are special. They have upvalues, so we wouldn't
-                // normally fix them, but if we see them in the globals table we can
-                // be reasonably sure that they're the "real" ipairs and pairs, which
-                // should always have the same upvalues. They're okay to fix.
-                // The upvalues are also closures, but we expect that we've already fixed
-                // them, and that they won't be boxed in a GC'd `UpVal` object.
-                luaC_fix(gcvalue(global_val));
-                continue;
-            }
-            else if (!strcmp(key_str, "vector"))
+            if (!strcmp(key_str, "vector"))
             {
                 // vector has a special metatable with `__call` which should be fixable.
                 if (ttistable(global_val))
@@ -2176,4 +2213,16 @@ size_t lua_userthreadsize(lua_State *L, const lua_OpaqueGCObjectSet* free_object
 lua_OpaqueGCObjectSet lua_collectfreeobjects(lua_State *L)
 {
     return luaC_collectfreeobjects(L);
+}
+
+LUAI_FUNC void luaA_dupcclosure(lua_State *L, int idx, const char *debugname)
+{
+    idx = lua_absindex(L, idx);
+    auto *cl = clvalue(luaA_toobject(L, idx));
+    api_check(L, cl->isC);
+    for (int i=1; i<=cl->nupvalues; ++i)
+    {
+        lua_getupvalue(L, idx, i);
+    }
+    lua_pushcclosurek(L, cl->c.f, debugname, cl->nupvalues, cl->c.cont);
 }

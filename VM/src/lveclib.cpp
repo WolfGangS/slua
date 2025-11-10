@@ -5,6 +5,7 @@
 #include "lnumutils.h"
 #include "llsl.h"
 #include "ldebug.h"
+#include "lapi.h"
 
 #include <math.h>
 
@@ -433,6 +434,7 @@ static void createmetatable(lua_State* L)
 
 int luaopen_vector(lua_State* L)
 {
+    [[maybe_unused]] int old_top = lua_gettop(L);
     luaL_register(L, LUA_VECLIBNAME, vectorlib);
 
     if (FFlag::LuauVectorLerp)
@@ -459,10 +461,21 @@ int luaopen_vector(lua_State* L)
     lua_newtable(L);
     lua_pushcfunction(L, vector_call, "__call");
     lua_setfield(L, -2, "__call");
+
+    // We need to override __iter so generalized iteration doesn't try to use __call.
+    lua_rawgetfield(L, LUA_BASEGLOBALSINDEX, "pairs");
+    // This is confusing at first, but we want a unique function identity
+    // when this shows up anywhere other than globals, otherwise we can
+    // muck up Ares serialization.
+    luaA_dupcclosure(L, -1, "__iter");
+    lua_replace(L, -2);
+    lua_rawsetfield(L, -2, "__iter");
+
     lua_setreadonly(L, -1, true);
     lua_setmetatable(L, -2);
 
     createmetatable(L);
 
+    LUAU_ASSERT(lua_gettop(L) == old_top + 1);
     return 1;
 }

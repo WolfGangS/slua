@@ -215,4 +215,14 @@ end
 
 assert(is_native_if_supported())
 
+-- Test that vector module supports generalized iteration (has __iter)
+local items = {}
+for k, v in vector do
+    table.insert(items, {key = k, value = v})
+end
+table.sort(items, function(a, b) return a.key < b.key end)
+local first = items[1]
+assert(first.key == "abs")
+assert(first.value == vector.abs)
+
 return 'OK'
