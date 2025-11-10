@@ -2861,6 +2861,24 @@ static void scavenge_global_cfuncs_internal(lua_State *L, bool forUnpersist, con
             Closure *cl = clvalue(luaA_toobject(L, -1));
             // We only need to be careful about C functions, so let's look for those.
             if (cl->isC) {
+                // Check if this closure object is already registered
+                lua_pushvalue(L, -1);  /* ... perms glob_tab k v v */
+                lua_rawget(L, perms_idx);  /* ... perms glob_tab k v existing_name_or_nil */
+                if (!lua_isnil(L, -1)) {
+                    // This closure is already registered!
+                    const char *existing_name = lua_tostring(L, -1);
+                    const char *key_name = luaL_checkstring(L, -3);  // The key 'k'
+                    const char *new_name;
+                    if (mod_name) {
+                        new_name = lua_pushfstringL(L, "%s.%s", mod_name, key_name);
+                    } else {
+                        new_name = key_name;
+                    }
+                    luaL_error(L, "Duplicate closure registration in Ares permanents: closure already registered as '%s', attempting to register as '%s'. Use luaA_dupcclosure() to create distinct identities.",
+                              existing_name ? existing_name : "(unknown)", new_name);
+                }
+                lua_pop(L, 1);  /* ... perms glob_tab k v */
+
                 if (forUnpersist) {
                     if (mod_name) {
                         lua_pushfstringL(L, "eris__glob_mod_%s_%s", mod_name, luaL_checkstring(L, -2));
@@ -2890,8 +2908,14 @@ static void scavenge_global_cfuncs_internal(lua_State *L, bool forUnpersist, con
             }
         }
         else if (mod_name == nullptr && val_type == LUA_TTABLE) {
+            // Skip _G since it's a self-reference to globals - we're already scanning it
+            const char *key = lua_tostring(L, -2);
+            if (strcmp(key, "_G") == 0) {
+                lua_pop(L, 1);
+                continue;
+            }
             // Scan this table, but don't scan inside further tables.
-            scavenge_global_cfuncs_internal(L, forUnpersist, luaL_checkstring(L, -2), perms_idx);
+            scavenge_global_cfuncs_internal(L, forUnpersist, key, perms_idx);
         }
         // Pop the value
         lua_pop(L, 1);                                /* ... perms glob_tab k */
@@ -3068,6 +3092,10 @@ void eris_populate_perms(lua_State *L, bool for_unpersist) {
         lua_pop(L, 1);
 
         populateperms(L, for_unpersist);
+        if (!for_unpersist) {
+            // Populate fallback table only from statically registered closures
+            store_cfunc_perms(L);
+        }
         scavenge_global_cfuncs(L, for_unpersist);
         scavenge_sl_vm_internals(L, for_unpersist);
 
@@ -3079,7 +3107,6 @@ void eris_populate_perms(lua_State *L, bool for_unpersist) {
             eris_incr_top(L);
             lua_rawset(L, -3);
         } else {
-            store_cfunc_perms(L);
             luaC_threadbarrier(L);
             sethvalue(L, L->top, eris_getglobalsbase(L));
             eris_incr_top(L);

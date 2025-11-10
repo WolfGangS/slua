@@ -989,6 +989,7 @@ static int ll_detectedtouchface(lua_State *L)
     return 1;
 }
 
+// Obviously this is not a good CSPRNG, but it's only for testing.
 static int ll_generatekey(lua_State *L)
 {
     uint32_t pcg32_random(uint64_t* state);
