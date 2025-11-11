@@ -612,30 +612,49 @@ TEST_CASE("Can interrupt everywhere in simple script")
 }
 
 static int breakable_count = 0;
+static bool must_break = false;
 
 static int breakable(lua_State *L)
 {
+    must_break = true;
     ++breakable_count;
     luau_interruptoncalltail(L);
     return LUA_OK;
 }
 
+static int breakcheck_index(lua_State *L)
+{
+    // this should have already been cleared
+    CHECK(!L->global->calltailinterruptcheck);
+    // Should have already done it!
+    CHECK(!must_break);
+    // return a function that does exactly nothing, so we can test LOP_NAMECALL
+    lua_pushcfunction(L, lua_silence, "nothing");
+    return 1;
+}
+
 TEST_CASE("Can break at tail of LOP_CALL")
 {
+    must_break = false;
+    breakable_count = 0;
     auto state = runConformance("breakcheck.lua", nullptr, [](lua_State *L) {
         lua_pushcfunction(L, breakable, "breakable");
         lua_setglobal(L, "breakable");
+        lua_pushcfunction(L, breakcheck_index, "breakcheck_index");
+        lua_setglobal(L, "breakcheck_index");
+        lua_pushcfunction(L, lua_silence, "nothing");
+        lua_setglobal(L, "nothing");
         lua_callbacks(L)->interrupt = [](lua_State *L, int gc) {
             if (gc >= 0)
                 return;
             auto may_yield = luaSL_may_interrupt(L);
-            if (may_yield != YieldableStatus::OK)
+            if (may_yield != YieldableStatus::OK && must_break)
             {
                 LUAU_ASSERT(!"Unexpected may_interrupt return code");
             }
 
             auto *ud = ((SLTestRuntimeState*)L->userdata);
-            if (ud->skip_next_break)
+            if (ud->skip_next_break && !must_break)
             {
                 // Don't break twice in a row.
                 ud->skip_next_break = 0;
@@ -649,15 +668,19 @@ TEST_CASE("Can break at tail of LOP_CALL")
             if (!L->global->calltailinterruptcheck)
                 ud->skip_next_break = 1;
 
-            ud->break_num++;
-            lua_break(L);
+            if (must_break || may_yield == YieldableStatus::OK)
+            {
+                ud->break_num++;
+                must_break = false;
+                lua_break(L);
+            }
         };
     });
     // Make sure the function actually ran
-    CHECK_EQ(breakable_count, 1);
+    CHECK_EQ(breakable_count, 2);
     // We should have broken 3 times, once at the start of LOP_CALL,
     // one at the end, and one at the LOP_RETURN.
-    CHECK_EQ(((SLTestRuntimeState*)state->userdata)->break_num, 3);
+    CHECK_EQ(((SLTestRuntimeState*)state->userdata)->break_num, 5);
 }
 
 TEST_CASE("String comparisons work with a non-default memcat")
