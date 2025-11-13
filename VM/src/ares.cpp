@@ -2840,7 +2840,28 @@ u_header(Info *info) {
   info->u.upi.vector_components = READ_VALUE(uint8_t);
 }
 
-static void scavenge_global_cfuncs_internal(lua_State *L, bool forUnpersist, const char *mod_name, int perms_idx=-1) {
+// stack effect -2
+extern "C" void register_perm_checked(lua_State *L, int perms_idx, const char *context) {
+    perms_idx = lua_absindex(L, perms_idx);
+
+    // Check if this key is already registered
+    lua_pushvalue(L, -2);
+    lua_rawget(L, perms_idx);
+
+    if (!lua_isnil(L, -1)) {
+        const char *existing_name = lua_tostring(L, -1);
+        const char *new_name = lua_tostring(L, -2);
+        luaL_error(L, "Duplicate permanent object in %s: already registered as '%s', attempting to register as '%s'",
+                  context,
+                  existing_name ? existing_name : "(unknown)",
+                  new_name ? new_name : "(unknown)");
+    }
+    lua_pop(L, 1);
+
+    lua_rawset(L, perms_idx);
+}
+
+static void scavenge_global_perms_internal(lua_State *L, bool forUnpersist, const char *mod_name, int perms_idx=-1) {
     if (perms_idx == -1)
         perms_idx = lua_gettop(L) - 1;
 
@@ -2861,24 +2882,6 @@ static void scavenge_global_cfuncs_internal(lua_State *L, bool forUnpersist, con
             Closure *cl = clvalue(luaA_toobject(L, -1));
             // We only need to be careful about C functions, so let's look for those.
             if (cl->isC) {
-                // Check if this closure object is already registered
-                lua_pushvalue(L, -1);  /* ... perms glob_tab k v v */
-                lua_rawget(L, perms_idx);  /* ... perms glob_tab k v existing_name_or_nil */
-                if (!lua_isnil(L, -1)) {
-                    // This closure is already registered!
-                    const char *existing_name = lua_tostring(L, -1);
-                    const char *key_name = luaL_checkstring(L, -3);  // The key 'k'
-                    const char *new_name;
-                    if (mod_name) {
-                        new_name = lua_pushfstringL(L, "%s.%s", mod_name, key_name);
-                    } else {
-                        new_name = key_name;
-                    }
-                    luaL_error(L, "Duplicate closure registration in Ares permanents: closure already registered as '%s', attempting to register as '%s'. Use luau_dupcclosure() to create distinct identities.",
-                              existing_name ? existing_name : "(unknown)", new_name);
-                }
-                lua_pop(L, 1);  /* ... perms glob_tab k v */
-
                 if (forUnpersist) {
                     if (mod_name) {
                         lua_pushfstringL(L, "eris__glob_mod_%s_%s", mod_name, luaL_checkstring(L, -2));
@@ -2904,18 +2907,50 @@ static void scavenge_global_cfuncs_internal(lua_State *L, bool forUnpersist, con
                     eris_assert(lua_type(L, -1) == LUA_TSTRING);
                     eris_assert(lua_type(L, -2) == LUA_TFUNCTION);
                 }
-                lua_rawset(L, perms_idx);           /* ... perms glob_tab k v */
+                register_perm_checked(L, perms_idx, "global scavenging");  /* ... perms glob_tab k v */
             }
         }
-        else if (mod_name == nullptr && val_type == LUA_TTABLE) {
-            // Skip _G since it's a self-reference to globals - we're already scanning it
+        else if (val_type == LUA_TTABLE) {
             const char *key = lua_tostring(L, -2);
-            if (strcmp(key, "_G") == 0) {
+
+            // Skip _G since it's a self-reference to globals - we're already scanning it
+            // (it's already a permanent as eris__globals_base)
+            if (mod_name == nullptr && strcmp(key, "_G") == 0) {
                 lua_pop(L, 1);
                 continue;
             }
-            // Scan this table, but don't scan inside further tables.
-            scavenge_global_cfuncs_internal(L, forUnpersist, key, perms_idx);
+
+            // Register the table itself as a permanent
+            if (forUnpersist) {
+                if (mod_name) {
+                    lua_pushfstringL(L, "eris__glob_mod_%s_%s", mod_name, key);
+                } else {
+                    lua_pushfstringL(L, "eris__glob_table_%s", key);
+                }
+                                           /* ... perms glob_tab k v ref_name */
+                lua_pushvalue(L, -2);
+                                      /* ... perms glob_tab k v ref_name table */
+                eris_assert(lua_type(L, -2) == LUA_TSTRING);
+                eris_assert(lua_type(L, -1) == LUA_TTABLE);
+            } else {
+                lua_pushvalue(L, -1);
+                                               /* ... perms glob_tab k v table */
+                if (mod_name) {
+                    lua_pushfstringL(L, "eris__glob_mod_%s_%s", mod_name, key);
+                } else {
+                    lua_pushfstringL(L, "eris__glob_table_%s", key);
+                }
+                                      /* ... perms glob_tab k v table ref_name */
+                eris_assert(lua_type(L, -1) == LUA_TSTRING);
+                eris_assert(lua_type(L, -2) == LUA_TTABLE);
+            }
+            register_perm_checked(L, perms_idx, "global scavenging");
+                                           /* ... perms glob_tab k v */
+
+            // Recurse into table to find nested objects (only at top level to avoid deep nesting)
+            if (mod_name == nullptr) {
+                scavenge_global_perms_internal(L, forUnpersist, key, perms_idx);
+            }
         }
         // Pop the value
         lua_pop(L, 1);                                /* ... perms glob_tab k */
@@ -2923,16 +2958,16 @@ static void scavenge_global_cfuncs_internal(lua_State *L, bool forUnpersist, con
     }
 }
 
-/// Looks through the base globals for C functions to treat as statics.
-/// This makes the assumption that all global c functions have equivalent upvals
-static void scavenge_global_cfuncs(lua_State *L, bool forUnpersist) {
+/// Looks through the base globals for all objects to register as permanents.
+/// Registers tables, C closures, and other objects reachable from globals.
+static void scavenge_global_perms(lua_State *L, bool forUnpersist) {
     eris_ifassert(const int top = lua_gettop(L));
     // Push the real, underlying globals table onto the stack
     TValue gt_tv;
     sethvalue(L, &gt_tv, eris_getglobalsbase(L));
     luaA_pushobject(L, &gt_tv);                         /* ... perms glob_tab */
 
-    scavenge_global_cfuncs_internal(L, forUnpersist, nullptr);
+    scavenge_global_perms_internal(L, forUnpersist, nullptr);
 
                                                         /* ... perms glob_tab */
     lua_pop(L, 1);                                               /* ... perms */
@@ -2955,48 +2990,6 @@ static void scavenge_sl_vm_internals(lua_State *L, bool forUnpersist) {
     eris_ifassert(const int top = lua_gettop(L));
     int perms_idx = lua_gettop(L);
 
-    const std::vector<std::pair<const char *, int>> lsl_vm_refs {
-        // none for now
-    };
-
-    const std::vector<std::pair<const char *, void *>> lljson_refs {
-        {"eris__lljson_array_mt", JSON_ARRAY},
-        {"eris__lljson_empty_array_mt", JSON_EMPTY_ARRAY},
-    };
-
-    for (const auto &vm_ref_iter : lsl_vm_refs) {
-        if (vm_ref_iter.second == -1)
-            continue;
-
-        if (forUnpersist) {
-            lua_pushstring(L, vm_ref_iter.first);
-            lua_getref(L, vm_ref_iter.second);
-        } else {
-            lua_getref(L, vm_ref_iter.second);
-            lua_pushstring(L, vm_ref_iter.first);
-        }
-        lua_rawset(L, perms_idx);
-    }
-
-    if (have_module(L, LUA_CJSONLIBNAME)) {
-        // lljson stores its references in the registry in a special way :/
-        for (const auto& json_ref_iter : lljson_refs) {
-            if (forUnpersist) {
-                lua_pushstring(L, json_ref_iter.first);
-                lua_pushlightuserdatatagged(L, json_ref_iter.second, LU_TAG_JSON_INTERNAL);
-                // Get the actual value out of the registry
-                lua_rawget(L, LUA_REGISTRYINDEX);
-            }
-            else {
-                lua_pushlightuserdatatagged(L, json_ref_iter.second, LU_TAG_JSON_INTERNAL);
-                // get the actual value out of the registry
-                lua_rawget(L, LUA_REGISTRYINDEX);
-                lua_pushstring(L, json_ref_iter.first);
-            }
-            lua_rawset(L, perms_idx);
-        }
-    }
-
     // Mark the methods on internal userdata functions as internal
     for (int i=0; i<LUA_UTAG_LIMIT; ++i) {
         LuaTable *udata_mt = L->global->udatamt[i];
@@ -3008,7 +3001,7 @@ static void scavenge_sl_vm_internals(lua_State *L, bool forUnpersist) {
             sethvalue(L, &udata_mt_tv, udata_mt);
             luaA_pushobject(L, &udata_mt_tv);           /* ... perms udata_mt */
 
-            scavenge_global_cfuncs_internal(L, forUnpersist, mt_mod_name.c_str());
+            scavenge_global_perms_internal(L, forUnpersist, mt_mod_name.c_str());
             lua_pop(L, 1);                                       /* ... perms */
         }
     }
@@ -3019,7 +3012,7 @@ static void scavenge_sl_vm_internals(lua_State *L, bool forUnpersist) {
         TValue udata_mt_tv;
         sethvalue(L, &udata_mt_tv, L->global->mt[LUA_TVECTOR]);
         luaA_pushobject(L, &udata_mt_tv); /* ... perms udata_mt */
-        scavenge_global_cfuncs_internal(L, forUnpersist, "vector_type__mt");
+        scavenge_global_perms_internal(L, forUnpersist, "vector_type__mt");
         lua_pop(L, 1);
     }
 
@@ -3096,7 +3089,7 @@ void eris_populate_perms(lua_State *L, bool for_unpersist) {
             // Populate fallback table only from statically registered closures
             store_cfunc_perms(L);
         }
-        scavenge_global_cfuncs(L, for_unpersist);
+        scavenge_global_perms(L, for_unpersist);
         scavenge_sl_vm_internals(L, for_unpersist);
 
         // Store a perm for the underlying globals object

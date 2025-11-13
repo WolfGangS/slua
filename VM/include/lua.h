@@ -488,6 +488,9 @@ LUA_API void lua_unref(lua_State* L, int ref);
 */
 
 #if defined(eris_c)
+/* Forward declaration of internal duplicate-checking function */
+extern "C" void register_perm_checked(lua_State *L, int perms_idx, const char *context);
+
 /* Utility macro for populating the perms table with internal C functions. */
 # define eris_persist_static(lib, fn) eris_persist_static_cont(lib, fn, doesntmatter)
 # define eris_persist_static_cont(lib, fn, cont)\
@@ -502,7 +505,7 @@ LUA_API void lua_unref(lua_State* L, int ref);
       lua_pushcclosurek(L, *__perm_##lib##_##fn, #fn, 0, *__perm_##lib##_##fn##_cont);\
       lua_pushstring(L, "__eris." #lib "_" #fn);\
     }\
-    lua_rawset(L, -3);
+    register_perm_checked(L, -3, "populateperms");
 
 // Can just use the same wrapper here.
 # define eris_persist_cont(lib, fn, cont) eris_persist_static_cont(lib, fn, cont)
