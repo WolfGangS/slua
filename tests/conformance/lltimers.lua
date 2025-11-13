@@ -173,6 +173,33 @@ assert(zero_continuous_count == 7, "Zero-interval timer should still work after 
 
 LLTimers:off(zero_continuous_handler)
 
+-- Test very small non-zero intervals get clamped to minimum (1e-6)
+setclock(60.0)
+local tiny_count = 0
+local tiny_scheduled_times = {}
+local tiny_handler = LLTimers:on(1e-308, function(scheduled_time)
+    tiny_count += 1
+    table.insert(tiny_scheduled_times, scheduled_time)
+end)
+
+-- Fire first time
+setclock(60.000002)  -- 2 microseconds later, should fire (clamped to 1e-6)
+LLTimers:_tick()
+assert(tiny_count == 1, "Tiny interval timer should fire")
+
+-- Advance by the clamped minimum interval (1e-6 = 1 microsecond)
+setclock(60.000003)  -- Another microsecond
+LLTimers:_tick()
+assert(tiny_count == 2, "Tiny interval should be clamped to minimum")
+
+-- Verify the interval is actually clamped by checking schedule spacing
+-- The difference should be ~1e-6, not 1e-308
+local interval_used = tiny_scheduled_times[2] - tiny_scheduled_times[1]
+assert(interval_used > 9e-7, "Clamped interval should be ~1e-6")
+assert(interval_used < 2e-6, "Clamped interval should be ~1e-6")
+
+LLTimers:off(tiny_handler)
+
 -- Test invalid handler type
 success, err = pcall(function()
     LLTimers:on(1, "not a function")

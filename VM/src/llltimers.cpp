@@ -125,6 +125,11 @@ static int lltimers_on(lua_State *L)
     if (seconds < 0.0)
         luaL_errorL(L, "timer interval must be positive or 0");
 
+    // Clamp very small non-zero intervals to prevent division overflow in catchup logic
+    constexpr double MIN_TIMER_INTERVAL = 1e-6;
+    if (seconds > 0.0 && seconds < MIN_TIMER_INTERVAL)
+        seconds = MIN_TIMER_INTERVAL;
+
     // Get current time
     double current_time = sl_state->clockProvider ? sl_state->clockProvider(L) : 0.0;
 
