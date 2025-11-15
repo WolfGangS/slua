@@ -2861,7 +2861,41 @@ extern "C" void register_perm_checked(lua_State *L, int perms_idx, const char *c
     lua_rawset(L, perms_idx);
 }
 
-static void scavenge_global_perms_internal(lua_State *L, bool forUnpersist, const char *mod_name, int perms_idx=-1) {
+// Forward declaration
+static void scavenge_general_perms_internal(lua_State *L, bool forUnpersist, const std::string& prefix, int perms_idx= -1);
+
+/// Scans and registers the metatable of an object (if it has one and it's not a type metatable)
+static void scan_object_metatable(lua_State *L, bool forUnpersist, const std::string& prefix, int perms_idx) {
+                                                      // ... perms obj_table obj
+    if (lua_type(L, -1) != LUA_TTABLE || !lua_getmetatable(L, -1)) {
+        return;
+    }
+                                                   // ... perms obj_table obj mt
+
+    // Register the metatable as a permanent
+    std::string mt_name = prefix + "/mt";
+
+    if (forUnpersist) {
+        lua_pushstring(L, mt_name.c_str());   // ... perms obj_table obj mt name
+        lua_pushvalue(L, -2);              // ... perms obj_table obj mt name mt
+        eris_assert(lua_type(L, -2) == LUA_TSTRING);
+        eris_assert(lua_type(L, -1) == LUA_TTABLE);
+    } else {
+        lua_pushvalue(L, -1);                   // ... perms obj_table obj mt mt
+        lua_pushstring(L, mt_name.c_str());// ... perms obj_table obj mt mt name
+        eris_assert(lua_type(L, -1) == LUA_TSTRING);
+        eris_assert(lua_type(L, -2) == LUA_TTABLE);
+    }
+    register_perm_checked(L, perms_idx, mt_name.c_str());
+                                                   // ... perms obj_table obj mt
+
+    // Recursively scan the metatable's contents
+    scavenge_general_perms_internal(L, forUnpersist, mt_name, perms_idx);
+
+    lua_pop(L, 1);                                    // ... perms obj_table obj
+}
+
+static void scavenge_general_perms_internal(lua_State *L, bool forUnpersist, const std::string& prefix, int perms_idx) {
     if (perms_idx == -1)
         perms_idx = lua_gettop(L) - 1;
 
@@ -2882,13 +2916,11 @@ static void scavenge_global_perms_internal(lua_State *L, bool forUnpersist, cons
             Closure *cl = clvalue(luaA_toobject(L, -1));
             // We only need to be careful about C functions, so let's look for those.
             if (cl->isC) {
+                const char *key = lua_tostring(L, -2);
+                std::string perm_name = prefix + "/" + key;
+
                 if (forUnpersist) {
-                    if (mod_name) {
-                        lua_pushfstringL(L, "eris__glob_mod_%s_%s", mod_name, luaL_checkstring(L, -2));
-                    }
-                    else {
-                        lua_pushfstringL(L, "eris__glob_func_%s", luaL_checkstring(L, -2));
-                    }
+                    lua_pushstring(L, perm_name.c_str());
                                            /* ... perms glob_tab k v ref_name */
                     lua_pushvalue(L, -2);
                                       /* ... perms glob_tab k v ref_name func */
@@ -2897,36 +2929,52 @@ static void scavenge_global_perms_internal(lua_State *L, bool forUnpersist, cons
                 } else {
                     lua_pushvalue(L, -1);
                                                /* ... perms glob_tab k v func */
-                    if (mod_name) {
-                        lua_pushfstringL(L, "eris__glob_mod_%s_%s", mod_name, luaL_checkstring(L, -3));
-                    }
-                    else {
-                        lua_pushfstringL(L, "eris__glob_func_%s", luaL_checkstring(L, -3));
-                    }
+                    lua_pushstring(L, perm_name.c_str());
                                       /* ... perms glob_tab k v func ref_name */
                     eris_assert(lua_type(L, -1) == LUA_TSTRING);
                     eris_assert(lua_type(L, -2) == LUA_TFUNCTION);
                 }
-                register_perm_checked(L, perms_idx, "global scavenging");  /* ... perms glob_tab k v */
+                register_perm_checked(L, perms_idx, prefix.c_str());
+                                                    /* ... perms glob_tab k v */
             }
         }
         else if (val_type == LUA_TTABLE) {
             const char *key = lua_tostring(L, -2);
 
             // Skip _G since it's a self-reference to globals - we're already scanning it
-            // (it's already a permanent as eris__globals_base)
-            if (mod_name == nullptr && strcmp(key, "_G") == 0) {
+            // (it's already a permanent as globals_base)
+            if (prefix == "g" && strcmp(key, "_G") == 0) {
                 lua_pop(L, 1);
                 continue;
             }
 
-            // Register the table itself as a permanent
-            if (forUnpersist) {
-                if (mod_name) {
-                    lua_pushfstringL(L, "eris__glob_mod_%s_%s", mod_name, key);
-                } else {
-                    lua_pushfstringL(L, "eris__glob_table_%s", key);
+            // When scanning type metatables, skip __index if it points to the global module table
+            // (let the global scan register it with the canonical name)
+            // I really should just upgrade this repo to C++17...
+            if (prefix.find("type/") == 0 && prefix.find("/mt") == prefix.length() - 3 && strcmp(key, "__index") == 0) {
+                // Extract type name from "type/TYPENAME/mt" format
+                size_t type_start = 5;  // Skip "type/"
+                size_t type_end = prefix.find("/mt");
+                if (type_end != std::string::npos) {
+                    std::string type_name = prefix.substr(type_start, type_end - type_start);
+
+                    // Check if this __index table matches a global table with the same name as the type
+                    lua_rawgetfield(L, LUA_BASEGLOBALSINDEX, type_name.c_str());
+
+                    if (lua_rawequal(L, -2, -1)) {
+                        // They're the same table - skip registering this, let global scan handle it
+                        lua_pop(L, 2);
+                        continue;
+                    }
+                    lua_pop(L, 2); // Pop global_module and base_globals
                 }
+            }
+
+            // Register the table itself as a permanent
+            std::string perm_name = prefix + "/" + key;
+
+            if (forUnpersist) {
+                lua_pushstring(L, perm_name.c_str());
                                            /* ... perms glob_tab k v ref_name */
                 lua_pushvalue(L, -2);
                                       /* ... perms glob_tab k v ref_name table */
@@ -2935,21 +2983,21 @@ static void scavenge_global_perms_internal(lua_State *L, bool forUnpersist, cons
             } else {
                 lua_pushvalue(L, -1);
                                                /* ... perms glob_tab k v table */
-                if (mod_name) {
-                    lua_pushfstringL(L, "eris__glob_mod_%s_%s", mod_name, key);
-                } else {
-                    lua_pushfstringL(L, "eris__glob_table_%s", key);
-                }
+                lua_pushstring(L, perm_name.c_str());
                                       /* ... perms glob_tab k v table ref_name */
                 eris_assert(lua_type(L, -1) == LUA_TSTRING);
                 eris_assert(lua_type(L, -2) == LUA_TTABLE);
             }
-            register_perm_checked(L, perms_idx, "global scavenging");
-                                           /* ... perms glob_tab k v */
+            register_perm_checked(L, perms_idx, prefix.c_str());
+                                                    /* ... perms glob_tab k v */
+
+            // Scan the table's metatable if it has one
+            scan_object_metatable(L, forUnpersist, perm_name, perms_idx);
+                                                    /* ... perms glob_tab k v */
 
             // Recurse into table to find nested objects (only at top level to avoid deep nesting)
-            if (mod_name == nullptr) {
-                scavenge_global_perms_internal(L, forUnpersist, key, perms_idx);
+            if (prefix == "g") {
+                scavenge_general_perms_internal(L, forUnpersist, perm_name, perms_idx);
             }
         }
         // Pop the value
@@ -2967,7 +3015,7 @@ static void scavenge_global_perms(lua_State *L, bool forUnpersist) {
     sethvalue(L, &gt_tv, eris_getglobalsbase(L));
     luaA_pushobject(L, &gt_tv);                         /* ... perms glob_tab */
 
-    scavenge_global_perms_internal(L, forUnpersist, nullptr);
+    scavenge_general_perms_internal(L, forUnpersist, "g");
 
                                                         /* ... perms glob_tab */
     lua_pop(L, 1);                                               /* ... perms */
@@ -2994,25 +3042,44 @@ static void scavenge_sl_vm_internals(lua_State *L, bool forUnpersist) {
     for (int i=0; i<LUA_UTAG_LIMIT; ++i) {
         LuaTable *udata_mt = L->global->udatamt[i];
         if (udata_mt != nullptr) {
-            std::string mt_mod_name = "udata_mt_";
-            mt_mod_name += std::to_string(i);
+            // Do it by tag number in case names change
+            std::string mt_prefix = "udata/" + std::to_string(i) + "/mt";
 
             TValue udata_mt_tv;
             sethvalue(L, &udata_mt_tv, udata_mt);
             luaA_pushobject(L, &udata_mt_tv);           /* ... perms udata_mt */
 
-            scavenge_global_perms_internal(L, forUnpersist, mt_mod_name.c_str());
+            scavenge_general_perms_internal(L, forUnpersist, mt_prefix);
             lua_pop(L, 1);                                       /* ... perms */
         }
     }
 
-    // Vectors have their metatable elsewhere
-    // TODO: scan through `global->mt` fully!
-    if (L->global->mt[LUA_TVECTOR]) {
-        TValue udata_mt_tv;
-        sethvalue(L, &udata_mt_tv, L->global->mt[LUA_TVECTOR]);
-        luaA_pushobject(L, &udata_mt_tv); /* ... perms udata_mt */
-        scavenge_global_perms_internal(L, forUnpersist, "vector_type__mt");
+    // Scan type metatables
+    for (int type_idx = 0; type_idx < LUA_T_COUNT; type_idx++) {
+        if (!L->global->mt[type_idx]) {
+            continue;
+        }
+
+        TValue mt_tv;
+        sethvalue(L, &mt_tv, L->global->mt[type_idx]);
+        luaA_pushobject(L, &mt_tv); /* ... perms type_mt */
+
+        // Generate the metatable name: "type/TYPENAME/mt"
+        const char *type_name = lua_typename(L, type_idx);
+        std::string mt_name = std::string("type/") + type_name + "/mt";
+
+        // Register the metatable itself as a permanent
+        if (forUnpersist) {
+            lua_pushstring(L, mt_name.c_str());     /* ... perms type_mt name */
+            lua_pushvalue(L, -2);                /* ... perms type_mt name mt */
+        } else {
+            lua_pushvalue(L, -1);                     /* ... perms type_mt mt */
+            lua_pushstring(L, mt_name.c_str());  /* ... perms type_mt mt name */
+        }
+        register_perm_checked(L, top, mt_name.c_str());  /* ... perms type_mt */
+
+        // Scan its contents
+        scavenge_general_perms_internal(L, forUnpersist, mt_name);
         lua_pop(L, 1);
     }
 
@@ -3094,7 +3161,7 @@ void eris_populate_perms(lua_State *L, bool for_unpersist) {
 
         // Store a perm for the underlying globals object
         if (for_unpersist) {
-            lua_pushstring(L, "eris__globals_base");
+            lua_pushstring(L, "globals_base");
             luaC_threadbarrier(L);
             sethvalue(L, L->top, eris_getglobalsbase(L));
             eris_incr_top(L);
@@ -3103,7 +3170,7 @@ void eris_populate_perms(lua_State *L, bool for_unpersist) {
             luaC_threadbarrier(L);
             sethvalue(L, L->top, eris_getglobalsbase(L));
             eris_incr_top(L);
-            lua_pushstring(L, "eris__globals_base");
+            lua_pushstring(L, "globals_base");
             lua_rawset(L, -3);
         }
     }
