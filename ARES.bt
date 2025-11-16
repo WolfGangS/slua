@@ -25,7 +25,11 @@ typedef int32 int32_t;
 typedef uint64 size_t;
 typedef size_t ProtoPtr;
 
+const uchar UTAG_QUATERNION = 25;
 const uchar UTAG_UUID = 26;
+const uchar UTAG_DETECTED_EVENT = 28;
+const uchar UTAG_LLEVENTS = 29;
+const uchar UTAG_LLTIMERS = 30;
 
 #define LUA_TNONE		(-1)
 
@@ -647,14 +651,37 @@ struct Table {
 
 typedef struct {
     uint8_t utag;       /* Userdata tag */
-    if (utag == UTAG_UUID)
+    switch(utag)
+    {
+    case UTAG_UUID:
     {
         Object data;
+        break;
     }
-    else
+    case UTAG_DETECTED_EVENT:
+    {
+        int32_t index;
+        uint8_t valid;
+        uint8_t can_change_damage;
+        break;
+    }
+    case UTAG_LLEVENTS:
+    {
+        Object listeners;
+        break;
+    }
+    case UTAG_LLTIMERS:
+    {
+        Object timers;
+        Object llevents;
+        Object tick_wrapper;
+        break;
+    }
+    default:
     {
         size_t length;      /* Size of the data */
         uchar data[length]; /* The actual data */
+    }
     }
     Object metatable;   /* The metatable (nil for none, otherwise LUA_TTABLE) */
 } Userdata<optimize=false>;
