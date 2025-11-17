@@ -45,7 +45,7 @@ bundler.modules = {
             require = fake_require
 
             -- shared should not use our booby-trapped require
-            local shared = old_require("./shared")
+            local shared = require("./shared")
             FOO = "bar"
             return {FOO, shared.sharedfunc}
         end
@@ -65,8 +65,14 @@ bundler.modules = {
         function()
             -- Return a function that multiple modules can use
             return {
-                sharedfunc=function() return "foo" end
+                sharedfunc=function() return "foo" end,
+                passed=require("./converge"),
             }
+        end
+    ),
+    ["./converge"] = (
+        function()
+            return "pass"
         end
     )
 }
@@ -87,5 +93,7 @@ assert(bar == bar2)
 assert(bar.sharedfunc == foo[2])
 -- require() should have been inherited exactly
 assert(bar.func1() == require)
+-- And we should be able to read the result of ./converge
+assert(require('./shared').passed == "pass")
 
 return "OK"

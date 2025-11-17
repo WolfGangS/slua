@@ -309,6 +309,11 @@ static int dangerouslyexecuterequiredmodule(lua_State* L)
     Closure* cl = clvalue(o);
     if (cl->nupvalues != 0)
         luaL_error(L, "function with upvalues not allowed");
+    // We don't currently have any system-defined Lua closures,
+    // but we might at some point.
+    // TODO: Currently we accidentally do this in tests :(
+//    if (cl->memcat < 1)
+//        luaL_error(L, "can't wrap a system lua closure");
 
     // Intentionally creating this on the main thread so that we
     // don't automatically inherit the globals of the caller.
@@ -323,6 +328,9 @@ static int dangerouslyexecuterequiredmodule(lua_State* L)
     // SL needs some special logic for things that don't live on _G
     if (LUAU_IS_SL_VM(L))
     {
+        // New thread must inherit SL VM userdata from calling thread
+        co->userdata = L->userdata;
+
         // Limit the globals we let `require()`d inherit to limit shenanigans
         // Some of these objects conventionally live on the user globals object.
         using CopyableGlobalDetails = struct CopyableGlobalDetails {

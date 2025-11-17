@@ -58,8 +58,17 @@ static bool codegen = false;
 static bool lsl = false;
 static bool sl = false;
 static lua_SLRuntimeState lsl_state;
+
 static int program_argc = 0;
 char** program_argv = nullptr;
+
+// ServerLua: we need userthread data propagated
+static void userthread_callback(lua_State *LP, lua_State *L)
+{
+    if (LP == nullptr)
+        return;
+    lua_setthreaddata(L, lua_getthreaddata(LP));
+}
 
 // Ctrl-C handling
 static void sigintCallback(lua_State* L, int gc)
@@ -245,6 +254,8 @@ void setupState(lua_State* L)
         if (sl)
             lsl_state.slIdentifier = LUA_SL_IDENTIFIER;
 
+        lua_callbacks(L)->userthread = userthread_callback;
+
         luaopen_sl(L, true);
         if (lsl)
         {
@@ -310,7 +321,6 @@ std::string runCode(lua_State* L, const std::string& source)
     }
 
     lua_State* T = lua_newthread(L);
-    lua_setthreaddata(T, lua_getthreaddata(L));
 
     lua_pushvalue(L, -2);
     lua_remove(L, -3);

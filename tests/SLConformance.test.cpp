@@ -257,7 +257,6 @@ static StateRef runConformance(const char* name, void (*yield)(lua_State* L) = n
     // Create thread and runtime structures in memcat 0 (system allocations)
     lua_setmemcat(GL, 0);
     lua_State *L = lua_newthread(GL);
-    lua_setthreaddata(L, runtime_state);
 
     // Create a new writable global table for current thread
     luaL_sandboxthread(L);
