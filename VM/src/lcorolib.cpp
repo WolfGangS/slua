@@ -298,7 +298,7 @@ static int auxsandboxedfinish(lua_State* L, lua_State* co, int r)
     return r;
 }
 
-static int callsandboxedrequire(lua_State* L)
+static int dangerouslyexecuterequiredmodule(lua_State* L)
 {
     luaL_checktype(L, 1, LUA_TFUNCTION);
 
@@ -338,9 +338,26 @@ static int callsandboxedrequire(lua_State* L)
         };
         for (const auto &to_inherit : SL_GLOBALS)
         {
-            // We intentionally do not look at __index,
-            // it should be on the globals, we're not digging for it.
-            lua_rawgetfield(L, LUA_GLOBALSINDEX, to_inherit.name);
+            // Try pristine copy first
+            std::string pristine_name = std::string("/$ require_sandbox ") + to_inherit.name + " $";
+            lua_rawgetfield(L, LUA_GLOBALSINDEX, pristine_name.c_str());
+
+            if (lua_isnil(L, -1))
+            {
+                lua_pop(L, 1);
+                // Fall back to normal version
+                // We intentionally do not look at __index,
+                // it should be on the globals, we're not digging for it.
+                lua_rawgetfield(L, LUA_GLOBALSINDEX, to_inherit.name);
+
+                if (lua_isnil(L, -1))
+                {
+                    lua_pop(L, 1);
+                    luaL_errorL(L, "cannot call dangerouslyexecuterequiredmodule() without '%s' global",
+                                to_inherit.name);
+                }
+            }
+
             lua_xmove(L, co, 1);
 
             // And it better be something I'd expect to be there.
@@ -349,12 +366,17 @@ static int callsandboxedrequire(lua_State* L)
             {
                 luaL_errorL(
                     L,
-                    "cannot call callsandboxedrequire() with an invalid '%s' global",
+                    "cannot call dangerouslyexecuterequiredmodule() with an invalid '%s' global",
                     to_inherit.name
                 );
             }
 
+            // Set with normal name
+            lua_pushvalue(co, -1);  // Duplicate the value
             lua_rawsetfield(co, LUA_GLOBALSINDEX, to_inherit.name);
+
+            // Set with prefixed name (for nested calls)
+            lua_rawsetfield(co, LUA_GLOBALSINDEX, pristine_name.c_str());
         }
     }
 
@@ -370,7 +392,7 @@ static int callsandboxedrequire(lua_State* L)
     return auxsandboxedfinish(L, co, r);
 }
 
-static int callsandboxedrequirecont(lua_State* L, int status)
+static int dangerouslyexecuterequiredmodulecont(lua_State* L, int status)
 {
     lua_State* co = lua_tothread(L, 2);
 
@@ -402,8 +424,8 @@ int luaopen_coroutine(lua_State* L)
     lua_setfield(L, -2, "resume");
 
     // ServerLua: For mimicking sandboxing semantics of `require()`
-    lua_pushcclosurek(L, callsandboxedrequire, "callsandboxedrequire", 0, callsandboxedrequirecont);
-    lua_setglobal(L, "callsandboxedrequire");
+    lua_pushcclosurek(L, dangerouslyexecuterequiredmodule, "dangerouslyexecuterequiredmodule", 0, dangerouslyexecuterequiredmodulecont);
+    lua_setglobal(L, "dangerouslyexecuterequiredmodule");
 
     return 1;
 }

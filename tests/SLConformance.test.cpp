@@ -717,14 +717,14 @@ TEST_CASE("llcompat")
     runConformance("llcompat.lua");
 }
 
-TEST_CASE("callsandboxedrequire")
+TEST_CASE("dangerouslyexecuterequiredmodule")
 {
-    runConformance("callsandboxedrequire.lua");
+    runConformance("dangerouslyexecuterequiredmodule.lua");
 }
 
-TEST_CASE("callsandboxedrequire with breaks")
+TEST_CASE("dangerouslyexecuterequiredmodule with breaks")
 {
-    runConformance("callsandboxedrequire_breaks.lua", nullptr, [](lua_State *L) {
+    runConformance("dangerouslyexecuterequiredmodule_breaks.lua", nullptr, [](lua_State *L) {
         lua_pushcfunction(L, lua_break, "breaker");
         lua_setglobal(L, "breaker");
     });
