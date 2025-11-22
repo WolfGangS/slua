@@ -6,6 +6,8 @@
 #include "lcommon.h"
 
 #include <string.h>
+#include <stdio.h>
+#include <math.h>
 
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -365,5 +367,34 @@ char* luai_num2str(char* buf, double n)
             exp--;
 
         return printexp(exp, dot - 1);
+    }
+}
+
+// ServerLua: Format a float with normalized non-finite values for LSL semantics
+int luai_formatfloat(char* buf, size_t bufsize, const char* format, float value)
+{
+    LUAU_ASSERT(bufsize >= 20);
+
+    if (isnan(value))
+    {
+        memcpy(buf, "nan", 3);
+        return 3;
+    }
+    else if (isinf(value))
+    {
+        if (signbit(value))
+        {
+            memcpy(buf, "-inf", 4);
+            return 4;
+        }
+        else
+        {
+            memcpy(buf, "inf", 3);
+            return 3;
+        }
+    }
+    else
+    {
+        return snprintf(buf, bufsize, format, value);
     }
 }

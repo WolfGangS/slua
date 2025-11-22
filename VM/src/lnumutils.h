@@ -82,4 +82,10 @@ inline float luai_lerpf(float a, float b, float t)
 
 LUAI_FUNC char* luai_num2str(char* buf, double n);
 
+// ServerLua: Formats a single float to a string buffer, normalizing non-finite values (nan/inf/-inf)
+// to avoid platform-specific sprintf behavior (e.g., "1.#INF" on Windows vs "inf" on Linux).
+// This ensures consistent LSL semantics for vector/quaternion toString and JSON serialization.
+// Requires bufsize >= 20 and pre-zeroed buffer.
+LUAI_FUNC int luai_formatfloat(char* buf, size_t bufsize, const char* format, float value);
+
 #define luai_str2num(s, p) strtod((s), (p))

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <unordered_set>
 
+#include "lnumutils.h"
 #include "llsl.h"
 #include "mono_floats.h"
 #include "Luau/Bytecode.h"
@@ -1043,11 +1044,24 @@ static int lsl_tostring_quat(lua_State *L)
     if (a == nullptr)
         luaL_typeerror(L, 1, "quaternion");
 
-    if (LUAU_IS_LSL_VM(L))
-        lua_pushfstringL(L, "<%5.5f, %5.5f, %5.5f, %5.5f>", a[0], a[1], a[2], a[3]);
-    else
-        lua_pushfstringL(L, "<%.6g, %.6g, %.6g, %.6g>", a[0], a[1], a[2], a[3]);
+    char buf[128] = {};
+    char* p = buf;
+    *p++ = '<';
 
+    const char* format = LUAU_IS_LSL_VM(L) ? "%5.5f" : "%.6g";
+    for (int i = 0; i < 4; i++)
+    {
+        if (i > 0)
+        {
+            *p++ = ',';
+            *p++ = ' ';
+        }
+        p += luai_formatfloat(p, buf + sizeof(buf) - p, format, a[i]);
+    }
+
+    *p++ = '>';
+
+    lua_pushlstring(L, buf, p - buf);
     return 1;
 }
 

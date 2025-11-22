@@ -46,6 +46,7 @@
 #include <lualib.h>
 #include <vector>
 
+#include "../lnumutils.h"
 #include "llsl.h"
 #include "lljson.h"
 
@@ -824,21 +825,10 @@ static void json_append_object(lua_State *l, json_config_t *cfg,
 }
 
 static void json_append_coordinate_component(strbuf_t *json, float val) {
-    if (isnan(val)) {
-        strbuf_append_string(json, "nan");
-    } else if (isinf(val)) {
-        if (signbit(val))
-        {
-            strbuf_append_string(json, "-inf");
-        } else {
-            strbuf_append_string(json, "inf");
-        }
-    } else {
-        char format_buf[513];
-        // We specifically want a short representation here, don't use %f!
-        size_t str_len = snprintf((char*)(&format_buf), 512, "%.6g", val);
-        strbuf_append_mem(json, (const char *)&format_buf, str_len);
-    }
+    char format_buf[64] = {};
+    // Use shared helper to ensure consistent normalization of non-finite values
+    size_t str_len = luai_formatfloat(format_buf, sizeof(format_buf), "%.6g", val);
+    strbuf_append_mem(json, format_buf, str_len);
 }
 
 /* Serialise Lua data into JSON string. Return 1 if error an error happened, else 0 */
