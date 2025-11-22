@@ -26,6 +26,7 @@ LUAU_FASTINT(LuauRecursionLimit)
 LUAU_FASTFLAG(LuauStringConstFolding2)
 LUAU_FASTFLAG(LuauCompileTypeofFold)
 LUAU_FASTFLAG(LuauInterpStringConstFolding)
+LUAU_FASTFLAG(LuauCompileMathIsNanInfFinite)
 
 using namespace Luau;
 
@@ -2669,6 +2670,9 @@ TEST_CASE("RecursionParse")
 #if defined(LUAU_ENABLE_ASAN)
     ScopedFastInt flag(FInt::LuauRecursionLimit, 200);
 #elif defined(_NOOPT) || defined(_DEBUG)
+    ScopedFastInt flag(FInt::LuauRecursionLimit, 300);
+    // ServerLua: We do RelWithDebinfo MSVC builds and it does not like large stacks.
+#elif defined(_MSC_VER)
     ScopedFastInt flag(FInt::LuauRecursionLimit, 300);
 #endif
 
@@ -7904,7 +7908,7 @@ RETURN R1 -1
 
 TEST_CASE("BuiltinFolding")
 {
-    ScopedFastFlag luauCompileTypeofFold{FFlag::LuauCompileTypeofFold, true};
+    ScopedFastFlag _[]{{FFlag::LuauCompileTypeofFold, true}, {FFlag::LuauCompileMathIsNanInfFinite, true}};
 
     CHECK_EQ(
         "\n" + compileFunction(
@@ -7962,7 +7966,13 @@ return
     math.log(100, 10),
     typeof(nil),
     type(vector.create(1, 0, 0)),
-    (type("fin"))
+    (type("fin")),
+    math.isnan(0/0),
+    math.isnan(0),
+    math.isinf(math.huge),
+    math.isinf(-4),
+    math.isfinite(42),
+    math.isfinite(-math.huge)
 )",
                    0,
                    2
@@ -8021,7 +8031,13 @@ LOADN R49 2
 LOADK R50 K3 ['nil']
 LOADK R51 K4 ['vector']
 LOADK R52 K5 ['string']
-RETURN R0 53
+LOADB R53 1
+LOADB R54 0
+LOADB R55 1
+LOADB R56 0
+LOADB R57 1
+LOADB R58 0
+RETURN R0 59
 )"
     );
 }
