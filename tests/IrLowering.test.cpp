@@ -20,7 +20,10 @@ LUAU_FASTFLAG(LuauVectorLerp)
 LUAU_FASTFLAG(LuauCompileVectorLerp)
 LUAU_FASTFLAG(LuauTypeCheckerVectorLerp2)
 LUAU_FASTFLAG(LuauCodeGenVectorLerp2)
-LUAU_FASTFLAG(LuauCodeGenFMA)
+LUAU_FASTFLAG(LuauCompileUnusedUdataFix)
+LUAU_FASTFLAG(LuauCodegenFloatLoadStoreProp)
+LUAU_FASTFLAG(LuauCodegenBlockSafeEnv)
+LUAU_FASTFLAG(LuauCodegenChainLink)
 
 static void luauLibraryConstantLookup(const char* library, const char* member, Luau::CompileConstant* constant)
 {
@@ -165,7 +168,7 @@ static std::string getCodegenAssembly(const char* source, bool includeIrTypes = 
     copts.vectorCtor = "vector";
     copts.vectorType = "vector";
 
-    static const char* kUserdataCompileTypes[] = {"vec2", "color", "mat3", nullptr};
+    static const char* kUserdataCompileTypes[] = {"vec2", "color", "mat3", "vertex", nullptr};
     copts.userdataTypes = kUserdataCompileTypes;
 
     static const char* kLibrariesWithConstants[] = {"vector", "Vector3", nullptr};
@@ -478,17 +481,16 @@ TEST_CASE("VectorLerp")
         {FFlag::LuauCompileVectorLerp, true},
         {FFlag::LuauTypeCheckerVectorLerp2, true},
         {FFlag::LuauVectorLerp, true},
-        {FFlag::LuauCodeGenVectorLerp2, true}
+        {FFlag::LuauCodeGenVectorLerp2, true},
+        {FFlag::LuauCodegenBlockSafeEnv, true}
     };
-    if (FFlag::LuauCodeGenFMA)
-    {
-        CHECK_EQ(
-            "\n" + getCodegenAssembly(R"(
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(R"(
 local function vec3lerp(a: vector, b: vector, t: number)
     return vector.lerp(a, b, t)
 end
 )"),
-            R"(
+        R"(
 ; function vec3lerp($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -498,7 +500,7 @@ bb_0:
 bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
-  CHECK_SAFE_ENV exit(2)
+  implicit CHECK_SAFE_ENV exit(0)
   %15 = LOAD_TVALUE R0
   %16 = LOAD_TVALUE R1
   %17 = LOAD_DOUBLE R2
@@ -512,47 +514,13 @@ bb_bytecode_1:
   INTERRUPT 8u
   RETURN R3, 1i
 )"
-        );
-    }
-    else
-    {
-        CHECK_EQ(
-            "\n" + getCodegenAssembly(R"(
-local function vec3lerp(a: vector, b: vector, t: number)
-    return vector.lerp(a, b, t)
-end
-)"),
-            R"(
-; function vec3lerp($arg0, $arg1, $arg2) line 2
-bb_0:
-  CHECK_TAG R0, tvector, exit(entry)
-  CHECK_TAG R1, tvector, exit(entry)
-  CHECK_TAG R2, tnumber, exit(entry)
-  JUMP bb_2
-bb_2:
-  JUMP bb_bytecode_1
-bb_bytecode_1:
-  CHECK_SAFE_ENV exit(2)
-  %15 = LOAD_TVALUE R0
-  %16 = LOAD_TVALUE R1
-  %17 = LOAD_DOUBLE R2
-  %18 = NUM_TO_VEC %17
-  %19 = NUM_TO_VEC 1
-  %20 = SUB_VEC %16, %15
-  %21 = MUL_VEC %20, %18
-  %22 = ADD_VEC %15, %21
-  SELECT_VEC %22, %16, %18, %19
-  %24 = TAG_VECTOR %23
-  STORE_TVALUE R3, %24
-  INTERRUPT 8u
-  RETURN R3, 1i
-)"
-        );
-    }
+    );
 }
 
 TEST_CASE("ExtraMathMemoryOperands")
 {
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(a: number, b: number, c: number, d: number, e: number)
@@ -571,7 +539,7 @@ bb_0:
 bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
-  CHECK_SAFE_ENV exit(1)
+  implicit CHECK_SAFE_ENV exit(0)
   %16 = FLOOR_NUM R0
   %23 = CEIL_NUM R1
   %32 = ADD_NUM %16, %23
@@ -625,6 +593,8 @@ bb_2:
 
 TEST_CASE("DseInitialStackState2")
 {
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(a)
@@ -635,7 +605,7 @@ end
         R"(
 ; function foo($arg0) line 2
 bb_bytecode_0:
-  CHECK_SAFE_ENV exit(1)
+  implicit CHECK_SAFE_ENV exit(0)
   CHECK_TAG R0, tnumber, exit(1)
   FASTCALL 14u, R1, R0, 2i
   INTERRUPT 5u
@@ -729,6 +699,8 @@ bb_bytecode_2:
 
 TEST_CASE("BooleanCompare")
 {
+    ScopedFastFlag luauCodegenChainLink{FFlag::LuauCodegenChainLink, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -752,23 +724,17 @@ bb_bytecode_0:
   STORE_INT R2, %7
   JUMP bb_bytecode_2
 bb_bytecode_2:
-  %14 = LOAD_TAG R0
-  %15 = LOAD_INT R0
-  %16 = CMP_SPLIT_TVALUE %14, tboolean, %15, 0i, eq
+  %16 = CMP_SPLIT_TVALUE %5, tboolean, %6, 0i, eq
   STORE_TAG R3, tboolean
   STORE_INT R3, %16
   JUMP bb_bytecode_4
 bb_bytecode_4:
-  %23 = LOAD_TAG R0
-  %24 = LOAD_INT R0
-  %25 = CMP_SPLIT_TVALUE %23, tboolean, %24, 1i, not_eq
+  %25 = CMP_SPLIT_TVALUE %5, tboolean, %6, 1i, not_eq
   STORE_TAG R4, tboolean
   STORE_INT R4, %25
   JUMP bb_bytecode_6
 bb_bytecode_6:
-  %32 = LOAD_TAG R0
-  %33 = LOAD_INT R0
-  %34 = CMP_SPLIT_TVALUE %32, tboolean, %33, 0i, not_eq
+  %34 = CMP_SPLIT_TVALUE %5, tboolean, %6, 0i, not_eq
   STORE_TAG R5, tboolean
   STORE_INT R5, %34
   JUMP bb_bytecode_8
@@ -782,6 +748,8 @@ bb_bytecode_8:
 
 TEST_CASE("NumberCompare")
 {
+    ScopedFastFlag luauCodegenChainLink{FFlag::LuauCodegenChainLink, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -805,9 +773,7 @@ bb_bytecode_0:
   STORE_INT R2, %7
   JUMP bb_bytecode_2
 bb_bytecode_2:
-  %14 = LOAD_TAG R0
-  %15 = LOAD_DOUBLE R0
-  %16 = CMP_SPLIT_TVALUE %14, tnumber, %15, 3, not_eq
+  %16 = CMP_SPLIT_TVALUE %5, tnumber, %6, 3, not_eq
   STORE_TAG R3, tboolean
   STORE_INT R3, %16
   JUMP bb_bytecode_4
@@ -821,6 +787,8 @@ bb_bytecode_4:
 
 TEST_CASE("TypeCompare")
 {
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -832,7 +800,7 @@ end
         R"(
 ; function foo($arg0) line 2
 bb_bytecode_0:
-  CHECK_SAFE_ENV exit(1)
+  implicit CHECK_SAFE_ENV exit(0)
   %1 = LOAD_TAG R0
   %2 = GET_TYPE %1
   STORE_POINTER R2, %2
@@ -850,6 +818,8 @@ bb_bytecode_2:
 
 TEST_CASE("TypeofCompare")
 {
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -861,7 +831,7 @@ end
         R"(
 ; function foo($arg0) line 2
 bb_bytecode_0:
-  CHECK_SAFE_ENV exit(1)
+  implicit CHECK_SAFE_ENV exit(0)
   %1 = GET_TYPEOF R0
   STORE_POINTER R2, %1
   STORE_TAG R2, tstring
@@ -878,6 +848,8 @@ bb_bytecode_2:
 
 TEST_CASE("TypeofCompareCustom")
 {
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -889,7 +861,7 @@ end
         R"(
 ; function foo($arg0) line 2
 bb_bytecode_0:
-  CHECK_SAFE_ENV exit(1)
+  implicit CHECK_SAFE_ENV exit(0)
   %1 = GET_TYPEOF R0
   STORE_POINTER R2, %1
   STORE_TAG R2, tstring
@@ -907,6 +879,11 @@ bb_bytecode_2:
 
 TEST_CASE("TypeCondition")
 {
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+    ScopedFastFlag luauCodegenChainLink{FFlag::LuauCodegenChainLink, true};
+
+    // TODO: opportunity 1 - first store to R2 is dead, but dead store op doesn't go through glued chains yet
+    // TODO: opportunity 2 - bb_4 already made sure %1 == R0.tag is a number, check in bb_3 can be removed
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -921,16 +898,14 @@ end
         R"(
 ; function foo($arg0, $arg1) line 2
 bb_bytecode_0:
-  CHECK_SAFE_ENV exit(1)
+  implicit CHECK_SAFE_ENV exit(0)
   %1 = LOAD_TAG R0
   %2 = GET_TYPE %1
   STORE_POINTER R2, %2
   STORE_TAG R2, tstring
   JUMP bb_4
 bb_4:
-  %7 = LOAD_POINTER R2
-  %8 = LOAD_POINTER K2 ('number')
-  JUMP_EQ_POINTER %7, %8, bb_3, bb_bytecode_1
+  JUMP_EQ_TAG %1, tnumber, bb_3, bb_bytecode_1
 bb_3:
   CHECK_TAG R0, tnumber, bb_fallback_5
   CHECK_TAG R1, tnumber, bb_fallback_5
@@ -950,8 +925,67 @@ bb_bytecode_1:
     );
 }
 
+TEST_CASE("TypeCondition2")
+{
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+    ScopedFastFlag luauCodegenChainLink{FFlag::LuauCodegenChainLink, true};
+
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+local function foo(a, b)
+    if type(a) == "number" and type(b) == "number" then
+        return a + b
+    end
+    return nil
+end
+)"
+               ),
+        R"(
+; function foo($arg0, $arg1) line 2
+bb_bytecode_0:
+  implicit CHECK_SAFE_ENV exit(0)
+  %1 = LOAD_TAG R0
+  %2 = GET_TYPE %1
+  STORE_POINTER R2, %2
+  STORE_TAG R2, tstring
+  JUMP bb_4
+bb_4:
+  JUMP_EQ_TAG %1, tnumber, bb_3, bb_bytecode_1
+bb_3:
+  CHECK_SAFE_ENV exit(8)
+  %11 = LOAD_TAG R1
+  %12 = GET_TYPE %11
+  STORE_POINTER R2, %12
+  STORE_TAG R2, tstring
+  JUMP bb_7
+bb_7:
+  JUMP_EQ_TAG %11, tnumber, bb_6, bb_bytecode_1
+bb_6:
+  CHECK_TAG R0, tnumber, bb_fallback_8
+  CHECK_TAG R1, tnumber, bb_fallback_8
+  %24 = LOAD_DOUBLE R0
+  %26 = ADD_NUM %24, R1
+  STORE_DOUBLE R2, %26
+  STORE_TAG R2, tnumber
+  JUMP bb_9
+bb_9:
+  INTERRUPT 15u
+  RETURN R2, 1i
+bb_bytecode_1:
+  STORE_TAG R2, tnil
+  INTERRUPT 17u
+  RETURN R2, 1i
+)"
+    );
+}
+
 TEST_CASE("AssertTypeGuard")
 {
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+    ScopedFastFlag luauCodegenChainLink{FFlag::LuauCodegenChainLink, true};
+
+    // TODO: opportunity - CHECK_TRUTHY indirectly establishes that %1 is a number for CHECK_TAG in bb_5
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -964,7 +998,7 @@ end
         R"(
 ; function foo($arg0) line 2
 bb_bytecode_0:
-  CHECK_SAFE_ENV exit(1)
+  implicit CHECK_SAFE_ENV exit(0)
   %1 = LOAD_TAG R0
   %2 = GET_TYPE %1
   STORE_POINTER R3, %2
@@ -974,10 +1008,10 @@ bb_bytecode_0:
   STORE_INT R2, %8
   JUMP bb_bytecode_2
 bb_bytecode_2:
-  CHECK_TRUTHY tboolean, R2, exit(10)
+  CHECK_TRUTHY tboolean, %8, exit(10)
   JUMP bb_5
 bb_5:
-  CHECK_TAG R0, tnumber, bb_fallback_6
+  CHECK_TAG %1, tnumber, bb_fallback_6
   %28 = LOAD_DOUBLE R0
   %29 = ADD_NUM %28, %28
   STORE_DOUBLE R1, %29
@@ -1490,6 +1524,8 @@ bb_bytecode_0:
 #if LUA_VECTOR_SIZE == 3
 TEST_CASE("FastcallTypeInferThroughLocal")
 {
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -1508,11 +1544,11 @@ end
 ; function getsum($arg0, $arg1) line 2
 ; R2: vector from 0 to 18
 bb_bytecode_0:
+  implicit CHECK_SAFE_ENV exit(0)
   STORE_DOUBLE R4, 2
   STORE_TAG R4, tnumber
   STORE_DOUBLE R5, 3
   STORE_TAG R5, tnumber
-  CHECK_SAFE_ENV exit(4)
   CHECK_TAG R0, tnumber, exit(4)
   %11 = LOAD_DOUBLE R0
   STORE_VECTOR R2, %11, 2, 3
@@ -1540,6 +1576,8 @@ bb_bytecode_1:
 
 TEST_CASE("FastcallTypeInferThroughUpvalue")
 {
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -1560,11 +1598,11 @@ end
 ; function getsum($arg0, $arg1) line 4
 ; U0: vector
 bb_bytecode_0:
+  implicit CHECK_SAFE_ENV exit(0)
   STORE_DOUBLE R4, 2
   STORE_TAG R4, tnumber
   STORE_DOUBLE R5, 3
   STORE_TAG R5, tnumber
-  CHECK_SAFE_ENV exit(4)
   CHECK_TAG R0, tnumber, exit(4)
   %11 = LOAD_DOUBLE R0
   STORE_VECTOR R2, %11, 2, 3
@@ -1670,6 +1708,8 @@ bb_bytecode_4:
 #if LUA_VECTOR_SIZE == 3
 TEST_CASE("ArgumentTypeRefinement")
 {
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -1684,11 +1724,11 @@ end
 ; function getsum($arg0, $arg1) line 2
 ; R0: vector [argument]
 bb_bytecode_0:
+  implicit CHECK_SAFE_ENV exit(0)
   STORE_DOUBLE R3, 1
   STORE_TAG R3, tnumber
   STORE_DOUBLE R5, 3
   STORE_TAG R5, tnumber
-  CHECK_SAFE_ENV exit(4)
   CHECK_TAG R1, tnumber, exit(4)
   %12 = LOAD_DOUBLE R1
   STORE_VECTOR R2, 1, %12, 3
@@ -1709,6 +1749,8 @@ bb_bytecode_0:
 
 TEST_CASE("InlineFunctionType")
 {
+    ScopedFastFlag luauCodegenFloatLoadStoreProp{FFlag::LuauCodegenFloatLoadStoreProp, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -1746,8 +1788,7 @@ bb_bytecode_0:
   CHECK_TAG R0, tvector, exit(0)
   %2 = LOAD_FLOAT R0, 4i
   %8 = MUL_NUM %2, 3
-  %13 = LOAD_FLOAT R0, 4i
-  %19 = MUL_NUM %13, 5
+  %19 = MUL_NUM %2, 5
   %28 = ADD_NUM %8, %19
   STORE_DOUBLE R1, %28
   STORE_TAG R1, tnumber
@@ -2002,6 +2043,8 @@ end
 
 TEST_CASE("ForInManualAnnotation")
 {
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2031,9 +2074,9 @@ bb_0:
 bb_4:
   JUMP bb_bytecode_1
 bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
   STORE_DOUBLE R1, 0
   STORE_TAG R1, tnumber
-  CHECK_SAFE_ENV exit(1)
   GET_CACHED_IMPORT R2, K1 (nil), 1073741824u ('ipairs'), 2u
   %8 = LOAD_TVALUE R0
   STORE_TVALUE R3, %8
@@ -2539,6 +2582,54 @@ bb_bytecode_1:
     );
 }
 
+TEST_CASE("CustomUserdataMapping")
+{
+    ScopedFastFlag luauCompileUnusedUdataFix{FFlag::LuauCompileUnusedUdataFix, true};
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
+    // This test requires runtime component to be present
+    if (!Luau::CodeGen::isSupported())
+        return;
+
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+local function foo(a: mat3)
+    print(a, vec2.create(0, 0))
+end
+)",
+                   /* includeIrTypes */ true
+               ),
+        R"(
+; function foo($arg0) line 2
+; R0: mat3 [argument]
+bb_0:
+  CHECK_TAG R0, tuserdata, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
+  GET_CACHED_IMPORT R1, K1 (nil), 1073741824u ('print'), 1u
+  %6 = LOAD_TVALUE R0
+  STORE_TVALUE R2, %6
+  GET_CACHED_IMPORT R3, K4 (nil), 2149583872u ('vec2'.'create'), 4u
+  STORE_DOUBLE R4, 0
+  STORE_TAG R4, tnumber
+  STORE_DOUBLE R5, 0
+  STORE_TAG R5, tnumber
+  INTERRUPT 7u
+  SET_SAVEDPC 8u
+  CALL R3, 2i, -1i
+  INTERRUPT 8u
+  SET_SAVEDPC 9u
+  CALL R1, -1i, 0i
+  INTERRUPT 9u
+  RETURN R0, 0i
+)"
+    );
+}
+
 TEST_CASE("LibraryFieldTypesAndConstants")
 {
     CHECK_EQ(
@@ -2640,6 +2731,8 @@ bb_bytecode_0:
 
 TEST_CASE("Bit32BtestDirect")
 {
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(a: number)
@@ -2654,7 +2747,7 @@ bb_0:
 bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
-  CHECK_SAFE_ENV exit(2)
+  implicit CHECK_SAFE_ENV exit(0)
   %7 = LOAD_DOUBLE R0
   %8 = NUM_TO_UINT %7
   %10 = BITAND_UINT %8, 31i
@@ -2663,6 +2756,229 @@ bb_bytecode_1:
   STORE_TAG R1, tboolean
   INTERRUPT 7u
   RETURN R1, 1i
+)"
+    );
+}
+
+TEST_CASE("VectorLoadReuse")
+{
+    ScopedFastFlag luauCodegenFloatLoadStoreProp{FFlag::LuauCodegenFloatLoadStoreProp, true};
+
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(R"(
+local function shuffle(v: vector)
+    return v.x * v.x + v.y * v.y
+end
+)"),
+        R"(
+; function shuffle($arg0) line 2
+bb_0:
+  CHECK_TAG R0, tvector, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_FLOAT R0, 0i
+  %20 = MUL_NUM %6, %6
+  %25 = LOAD_FLOAT R0, 4i
+  %39 = MUL_NUM %25, %25
+  %48 = ADD_NUM %20, %39
+  STORE_DOUBLE R1, %48
+  STORE_TAG R1, tnumber
+  INTERRUPT 11u
+  RETURN R1, 1i
+)"
+    );
+}
+
+TEST_CASE("VectorShuffle1")
+{
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
+    // TODO: opportunity - if we introduce a separate vector shuffle instruction, this can be done in a single shuffle (+/- load and store)
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(R"(
+local function shuffle(v: vector)
+    return vector.create(v.z, v.x, v.y)
+end
+)"),
+        R"(
+; function shuffle($arg0) line 2
+bb_0:
+  CHECK_TAG R0, tvector, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
+  %6 = LOAD_FLOAT R0, 8i
+  %11 = LOAD_FLOAT R0, 0i
+  %16 = LOAD_FLOAT R0, 4i
+  STORE_VECTOR R1, %6, %11, %16
+  STORE_TAG R1, tvector
+  INTERRUPT 10u
+  RETURN R1, 1i
+)"
+    );
+}
+
+TEST_CASE("VectorShuffle2")
+{
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+    ScopedFastFlag luauCodegenFloatLoadStoreProp{FFlag::LuauCodegenFloatLoadStoreProp, true};
+
+    // TODO: opportunity - LOAD_FLOAT performs float->double conversion and STORE_VECTOR immediately performs double->float which should be skipped
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(R"(
+local function crossshuffle(v: vector, t: vector)
+    local tmp1 = vector.create(v.x, v.x, v.z)
+    local tmp2 = vector.create(t.y, t.z, t.x)
+    return vector.create(tmp1.z, tmp2.x, tmp1.y)
+end
+)"),
+        R"(
+; function crossshuffle($arg0, $arg1) line 2
+bb_0:
+  CHECK_TAG R0, tvector, exit(entry)
+  CHECK_TAG R1, tvector, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
+  %8 = LOAD_FLOAT R0, 0i
+  %18 = LOAD_FLOAT R0, 8i
+  %35 = LOAD_FLOAT R1, 4i
+  STORE_VECTOR R4, %18, %35, %8, tvector
+  INTERRUPT 30u
+  RETURN R4, 1i
+)"
+    );
+}
+
+TEST_CASE("VectorShuffleFromComposite1")
+{
+    // This test requires runtime component to be present
+    if (!Luau::CodeGen::isSupported())
+        return;
+
+    ScopedFastFlag luauCodegenFloatLoadStoreProp{FFlag::LuauCodegenFloatLoadStoreProp, true};
+
+    // TODO: opportunity - buffer memory load-store propagation can remove duplicate loads
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(R"(
+local function test(v: vertex)
+    return v.normal.X * v.normal.X + v.normal.Y * v.normal.Y
+end
+)"),
+        R"(
+; function test($arg0) line 2
+bb_0:
+  CHECK_TAG R0, tuserdata, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_POINTER R0
+  CHECK_USERDATA_TAG %6, 13i, exit(0)
+  %8 = BUFFER_READF32 %6, 12i, tuserdata
+  %22 = BUFFER_READF32 %6, 12i, tuserdata
+  %38 = MUL_NUM %8, %22
+  %46 = BUFFER_READF32 %6, 16i, tuserdata
+  %60 = BUFFER_READF32 %6, 16i, tuserdata
+  %75 = MUL_NUM %46, %60
+  %84 = ADD_NUM %38, %75
+  STORE_DOUBLE R1, %84
+  STORE_TAG R1, tnumber
+  INTERRUPT 19u
+  RETURN R1, 1i
+)"
+    );
+}
+
+TEST_CASE("VectorShuffleFromComposite2")
+{
+    // This test requires runtime component to be present
+    if (!Luau::CodeGen::isSupported())
+        return;
+
+    // TODO: opportunity - userdata memory load-store propagation can remove loads from values that have just been stored
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(R"(
+local function test(v: vertex)
+    return v.uv.X * v.uv.Y
+end
+)"),
+        R"(
+; function test($arg0) line 2
+bb_0:
+  CHECK_TAG R0, tuserdata, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_POINTER R0
+  CHECK_USERDATA_TAG %6, 13i, exit(0)
+  %8 = BUFFER_READF32 %6, 24i, tuserdata
+  %9 = BUFFER_READF32 %6, 28i, tuserdata
+  CHECK_GC
+  %11 = NEW_USERDATA 8i, 12i
+  BUFFER_WRITEF32 %11, 0i, %8, tuserdata
+  BUFFER_WRITEF32 %11, 4i, %9, tuserdata
+  %20 = BUFFER_READF32 %11, 0i, tuserdata
+  %27 = BUFFER_READF32 %6, 24i, tuserdata
+  %28 = BUFFER_READF32 %6, 28i, tuserdata
+  %30 = NEW_USERDATA 8i, 12i
+  BUFFER_WRITEF32 %30, 0i, %27, tuserdata
+  BUFFER_WRITEF32 %30, 4i, %28, tuserdata
+  STORE_POINTER R4, %30
+  STORE_TAG R4, tuserdata
+  %39 = BUFFER_READF32 %30, 4i, tuserdata
+  %48 = MUL_NUM %20, %39
+  STORE_DOUBLE R1, %48
+  STORE_TAG R1, tnumber
+  INTERRUPT 9u
+  RETURN R1, 1i
+)"
+    );
+}
+
+// Vectors use float storage, so in some cases it is impossible to forward value that was passed to the constructor as it was double->float truncated
+TEST_CASE("VectorLoadStoreOnlySamePrecision")
+{
+    ScopedFastFlag luauCodegenBlockSafeEnv{FFlag::LuauCodegenBlockSafeEnv, true};
+
+    // TODO: opportunity - LOAD_FLOAT can be replaced with a new NUM_TO_FLOAT instruction which will only handle the truncation
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(R"(
+local function test(x: number, y: number)
+    local vec = vector.create(x, y, 0)
+    return vec.X + vec.Y + vec.Z
+end
+)"),
+        R"(
+; function test($arg0, $arg1) line 2
+bb_0:
+  CHECK_TAG R0, tnumber, exit(entry)
+  CHECK_TAG R1, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
+  %15 = LOAD_DOUBLE R0
+  %16 = LOAD_DOUBLE R1
+  STORE_VECTOR R2, %15, %16, 0
+  STORE_TAG R2, tvector
+  %22 = LOAD_FLOAT R2, 0i
+  %27 = LOAD_FLOAT R2, 4i
+  %36 = ADD_NUM %22, %27
+  %41 = LOAD_FLOAT R2, 8i
+  %50 = ADD_NUM %36, %41
+  STORE_DOUBLE R3, %50
+  STORE_TAG R3, tnumber
+  INTERRUPT 16u
+  RETURN R3, 1i
 )"
     );
 }
