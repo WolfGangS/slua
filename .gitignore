@@ -21,4 +21,5 @@ __pycache__
 .clangd
 *.orig
 *.rej
-
+/fuzz/corpus/json/*
+!/fuzz/corpus/json/*.json
