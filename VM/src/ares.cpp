@@ -1280,6 +1280,11 @@ static void u_table(Info *info) {                                      /* ... */
       int iteridx = lua_tointeger(info->L, -1);
       lua_pop(info->L, 1);                                 /* ... tbl pos_tbl */
 
+      // Validate iteridx is within bounds
+      if (iteridx < 0 || iteridx >= actual_hash_size) {
+        eris_error(info, "malformed data: invalid iteration order index");
+      }
+
       table->iterorder[node_idx].node_to_iterorder_idx = iteridx;
       table->iterorder[iteridx].node_idx = (int)(node_idx);
     }
