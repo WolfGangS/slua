@@ -2389,15 +2389,21 @@ u_thread(Info *info) {                                                 /* ... */
   lua_setfenv(info->L, -2);                                     /* ... thread */
   poppath(info);
 
-  /* Unpersist the stack. Read size first and adjust accordingly. */
+  /* Unpersist the stack. Read size first and adjust accordingly.
+   * stack_size is the full stacksize (including EXTRA_STACK) as written by p_thread.
+   * luaD_reallocstack expects the usable size (without EXTRA_STACK) and adds it back. */
   uint32_t stack_size = READ_VALUE(uint32_t);
-  if (stack_size > kMaxStackSize) {
-    eris_error(info, "malformed data: stack size exceeds limit");
+  ares_size_t total = READ_VALUE(ares_size_t);
+  if (stack_size < LUA_MINSTACK + EXTRA_STACK || stack_size > kMaxStackSize) {
+    eris_error(info, "malformed data: invalid stack size");
+  }
+  if (stack_size < total + EXTRA_STACK) {
+    eris_error(info, "malformed data: stack size too small for used portion");
   }
   VALIDATE_SIZE(stack_size);
-  eris_reallocstack(thread, (int)stack_size, true);
+  eris_reallocstack(thread, (int)stack_size - EXTRA_STACK, true);
   stack = thread->stack; /* After the realloc in case the address changes. */
-  thread->top = thread->stack + (size_t)READ_VALUE(ares_size_t);
+  thread->top = thread->stack + (size_t)total;
   validate(thread->top, thread->stack_last);
 
   /* Read the elements one by one. */
