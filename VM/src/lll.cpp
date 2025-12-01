@@ -1004,6 +1004,16 @@ static int ll_generatekey(lua_State *L)
     return 1;
 }
 
+static int ll_die(lua_State *L)
+{
+    LUAU_ASSERT(false);
+    // Assign to nullptr if we fail to assert
+    volatile int* foo = nullptr;
+    *foo = 0;
+
+    return -1;
+}
+
 // Test functions that need compat mode handling for index semantics
 static const luaL_Reg lltestcompateligiblelib[] = {
     {"GetSubString", ll_getsubstring},
@@ -1021,6 +1031,7 @@ static const luaL_Reg lltestlib[] = {
     // Strictly just for testing that the `ll.Detected*()` wrappers work at all.
     {"DetectedTouchFace", ll_detectedtouchface},
     {"GenerateKey", ll_generatekey},
+    {"Die", ll_die},
     {NULL, NULL},
 };
 
