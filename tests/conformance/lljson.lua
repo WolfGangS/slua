@@ -259,6 +259,29 @@ assert(complex_decoded.str == complex.str)
 assert(complex_decoded.bang_str == complex.bang_str)
 assert(complex_decoded.nested.inner_vec == complex.nested.inner_vec)
 
+-- Tagged buffers: !d with base64 data
+local buf = buffer.create(4)
+buffer.writeu8(buf, 0, 0x1)
+buffer.writeu8(buf, 2, 0xff)
+assert(lljson.slencode(buf) == '"!dAQD/AA=="')
+
+-- Round-trip buffer
+local buf_decoded = lljson.sldecode('"!dAQD/AA=="')
+assert(buffer.len(buf_decoded) == 4)
+assert(buffer.readu8(buf_decoded, 0) == 0x1)
+assert(buffer.readu8(buf_decoded, 2) == 0xff)
+
+-- Empty buffer
+local empty_buf = buffer.create(0)
+assert(lljson.slencode(empty_buf) == '"!d"')
+local empty_decoded = lljson.sldecode('"!d"')
+assert(buffer.len(empty_decoded) == 0)
+
+-- Buffer as object key
+local buf_key_table = {[buf] = "data"}
+local buf_key_json = lljson.slencode(buf_key_table)
+assert(buf_key_json == '{"!dAQD/AA==":"data"}')
+
 -- ============================================
 -- Tight encoding mode (second arg = true)
 -- ============================================

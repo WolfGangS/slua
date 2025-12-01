@@ -875,6 +875,22 @@ static void json_append_tagged_quaternion(strbuf_t *json, const float *a, bool t
     strbuf_append_string(json, tight ? "\"" : ">\"");
 }
 
+static void json_append_buffer(lua_State *l, strbuf_t *json, int lindex)
+{
+    size_t buf_len = 0;
+    void *data = luaL_checkbuffer(l, lindex, &buf_len);
+
+    // Need to use something that will automatically de-alloc in case we hit
+    //  a memory limit appending to the buffer.
+    std::vector<char> encode_buf((size_t)apr_base64_encode_len(buf_len));
+    size_t encoded_len = apr_base64_encode_binary(encode_buf.data(), (const uint8_t *)data, buf_len);
+    if (encoded_len > 0)
+    {
+        // exclude the trailing null
+        strbuf_append_mem(json, encode_buf.data(), encoded_len - 1);
+    }
+}
+
 // Helper to parse a hex character to its value (returns -1 on error)
 static inline int hex_char_to_int(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -1025,8 +1041,14 @@ static void json_append_object(lua_State *l, json_config_t *cfg,
                 json_append_tagged_float(json, lua_tonumber(l, -2), cfg->encode_number_precision);
                 break;
             case LUA_TVECTOR: {
-                const float *a = lua_tovector(l, -2);
+                const float* a = lua_tovector(l, -2);
                 json_append_tagged_vector(json, a, cfg->sl_tight_encoding);
+                break;
+            }
+            case LUA_TBUFFER: {
+                strbuf_append_string(json, "\"!d");
+                json_append_buffer(l, json, -2);
+                strbuf_append_char(json, '"');
                 break;
             }
             case LUA_TUSERDATA: {
@@ -1220,18 +1242,10 @@ static int json_append_data(lua_State *l, json_config_t *cfg,
     }
     case LUA_TBUFFER: {
         strbuf_append_char(json, '"');
-        size_t buf_len = 0;
-        void *data = luaL_checkbuffer(l, -1, &buf_len);
+        if (cfg->sl_tagged_types)
+            strbuf_append_string(json, "!d");
 
-        // Need to use something that will automatically de-alloc in case we hit
-        //  a memory limit appending to the buffer.
-        std::vector<char> encode_buf((size_t)apr_base64_encode_len(buf_len));
-        size_t encoded_len = apr_base64_encode_binary(encode_buf.data(), (const uint8_t *)data, buf_len);
-        if (encoded_len > 0)
-        {
-            // exclude the trailing null
-            strbuf_append_mem(json, encode_buf.data(), encoded_len - 1);
-        }
+        json_append_buffer(l, json, -1);
         strbuf_append_char(json, '"');
         break;
     }
@@ -1534,6 +1548,25 @@ static bool json_parse_tagged_string(lua_State *l, const char *str, size_t len)
         }
         luaL_error(l, "malformed tagged boolean: %s", str);
         return false;
+
+    case 'd':
+    {
+        // Buffer (data): !d<base64 data>
+
+        if (payload_len > 0)
+        {
+            std::vector<uint8_t> decode_buf(payload_len);
+            size_t new_len = apr_base64_decode_binary(decode_buf.data(), payload);
+            if (new_len > 0)
+            {
+                void* buf_data = lua_newbuffer(l, new_len);
+                memcpy(buf_data, decode_buf.data(), new_len);
+                return true;
+            }
+        }
+        lua_newbuffer(l, 0);
+        return true;
+    }
 
     default:
         luaL_error(l, "unknown tag '!%c' in string: %s", tag, str);
