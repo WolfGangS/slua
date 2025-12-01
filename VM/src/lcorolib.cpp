@@ -314,6 +314,23 @@ static int auxsandboxedfinish(lua_State* L, lua_State* co, int r)
     return r;
 }
 
+// This is meant to allow executing code as if it was a "module" but
+// actually exists within the same translation unit. It gets its own
+// environment, and returned closures use that sandboxed environment.
+// This does pessimize LOP_DUPCLOSURE (always creates a new closure).
+// Luckily we don't run into issues with LOP_GETIMPORT _because_ the
+// modules are in the same TU, and LOP_GETIMPORT will be inhibited if
+// any of the "modules" set the value of a global that would otherwise
+// get that optimization.
+//
+// For similar reasons, the function cannot be called on Lua closures that
+// might have been created outside a user module (we do this check by
+// memcat) although we don't currently inject our own Lua functions.
+//
+// LLTimers and LLEvents are passed through to executed modules, so
+// they are technically allowed to mutate global state in limited ways,
+// and aren't necessarily pure.
+
 static int dangerouslyexecuterequiredmodule(lua_State* L)
 {
     luaL_checktype(L, 1, LUA_TFUNCTION);
