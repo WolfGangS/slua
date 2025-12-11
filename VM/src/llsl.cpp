@@ -1455,6 +1455,9 @@ int luaopen_sl_quaternion(lua_State* L)
     int old_top = lua_gettop(L);
     luaL_register(L, "quaternion", quaternionlib);
 
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, "rotation");
+
     luaSL_pushquaternion(L, 0.0, 0.0, 0.0, 1.0);
     lua_setfield(L, -2, "identity");
 
