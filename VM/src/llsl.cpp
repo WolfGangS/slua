@@ -1455,8 +1455,6 @@ int luaopen_sl_quaternion(lua_State* L)
     int old_top = lua_gettop(L);
     luaL_register(L, "quaternion", quaternionlib);
 
-    lua_pushvalue(L, -1);
-    lua_setglobal(L, "rotation");
 
     luaSL_pushquaternion(L, 0.0, 0.0, 0.0, 1.0);
     lua_setfield(L, -2, "identity");
@@ -1478,6 +1476,9 @@ int luaopen_sl_quaternion(lua_State* L)
 
     lua_setreadonly(L, -1, true);
     lua_setmetatable(L, -2);
+    
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, "rotation");
 
     LUAU_ASSERT(lua_gettop(L) == old_top + 1);
     return 1;
@@ -1614,6 +1615,8 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
 
     // Create quaternion module table
     luaopen_sl_quaternion(L);
+    lua_pop(L, 1);
+    LUAU_ASSERT(lua_gettop(L) == top);
 
     //////
     /// DetectedEvent
