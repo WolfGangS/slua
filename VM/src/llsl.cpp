@@ -1437,6 +1437,49 @@ static void make_weak_uuid_table(lua_State *L)
     lua_setmetatable(L, -2);
 }
 
+// ServerLua: callable vector module
+static int quaternion_call(lua_State *L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_remove(L, 1);
+    return lsl_quaternion_ctor(L);
+}
+
+static const luaL_Reg quaternionlib[] = {
+    {"create", lsl_quaternion_ctor},
+    {NULL, NULL},
+};
+
+int luaopen_sl_quaternion(lua_State* L)
+{
+    int old_top = lua_gettop(L);
+    luaL_register(L, "quaternion", quaternionlib);
+
+    luaSL_pushquaternion(L, 0.0, 0.0, 0.0, 1.0);
+    lua_setfield(L, -2, "identity");
+
+    // ServerLua: `quaternion()` is an alias to `quaternion.create()`, so we need to add a metatable
+    //  to the quaternion module which allows calling it.
+    lua_newtable(L);
+    lua_pushcfunction(L, quaternion_call, "__call");
+    lua_setfield(L, -2, "__call");
+
+    // We need to override __iter so generalized iteration doesn't try to use __call.
+    lua_rawgetfield(L, LUA_BASEGLOBALSINDEX, "pairs");
+    // This is confusing at first, but we want a unique function identity
+    // when this shows up anywhere other than globals, otherwise we can
+    // muck up Ares serialization.
+    luau_dupcclosure(L, -1, "__iter");
+    lua_replace(L, -2);
+    lua_rawsetfield(L, -2, "__iter");
+
+    lua_setreadonly(L, -1, true);
+    lua_setmetatable(L, -2);
+
+    LUAU_ASSERT(lua_gettop(L) == old_top + 1);
+    return 1;
+}
+
 int luaopen_sl(lua_State* L, int expose_internal_funcs)
 {
     if (!LUAU_IS_SL_VM(L))
@@ -1444,14 +1487,10 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
         luaL_errorL(L, "Tried to open sl module in non-SL VM");
     }
 
+
     int top = lua_gettop(L);
 
     // Load these into the global namespace
-    lua_pushcfunction(L, lsl_quaternion_ctor, "quaternion");
-    luau_dupcclosure(L, -1, "rotation");
-    // Alias it as "rotation"
-    lua_setglobal(L, "rotation");
-    lua_setglobal(L, "quaternion");
 
     if (LUAU_IS_LSL_VM(L))
     {
@@ -1569,6 +1608,9 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
     // Okay, don't need this on the stack anymore
     lua_pop(L, 1);
     LUAU_ASSERT(lua_gettop(L) == top);
+
+    // Create quaternion module table
+    luaopen_sl_quaternion(L);
 
     //////
     /// DetectedEvent
