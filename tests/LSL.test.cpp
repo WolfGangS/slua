@@ -87,7 +87,7 @@ static void checkStatus(lua_State *L, int status)
     }
 }
 
-static StateRef runConformance(const char* name, int32_t (*yield)(lua_State* L) = nullptr, void (*setup)(lua_State* L) = nullptr, lua_CompileOptions* options = nullptr)
+static StateRef runConformance(const char* name, int32_t (*yield)(lua_State* L) = nullptr, void (*setup)(lua_State* L) = nullptr, lua_CompileOptions* options = nullptr, const char* expectedError = nullptr)
 {
 #ifdef LUAU_CONFORMANCE_SOURCE_DIR
     std::string path = LUAU_CONFORMANCE_SOURCE_DIR;
@@ -209,11 +209,26 @@ static StateRef runConformance(const char* name, int32_t (*yield)(lua_State* L) 
 
     if (status == 0)
     {
-        // Do nothing for now.
+        // Script succeeded - fail if we expected an error
+        if (expectedError)
+        {
+            FAIL("Expected error '" << expectedError << "' but script succeeded");
+        }
     }
     else
     {
-        checkStatus(Lhandler, status);
+        // Script errored
+        if (expectedError)
+        {
+            // Check if the error matches what we expected
+            REQUIRE(lua_isstring(Lhandler, -1));
+            std::string error_msg = lua_tostring(Lhandler, -1);
+            CHECK(error_msg.find(expectedError) != std::string::npos);
+        }
+        else
+        {
+            checkStatus(Lhandler, status);
+        }
     }
 
     return globalState;
@@ -1045,6 +1060,21 @@ static std::string mono_to_lower_string(const std::string &str)
 static std::string mono_to_upper_string(const std::string &str)
 {
     return to_upper_mono(str.c_str(), str.length());
+}
+
+TEST_CASE("Integer MulAssign Float Result Error")
+{
+    runConformance("mul_assign_error.lsl", nullptr, nullptr, nullptr, "cannot take result of integer *= float");
+}
+
+TEST_CASE("Integer MulAssign Float Valid Contexts")
+{
+    runConformance("mul_assign_valid.lsl");
+}
+
+TEST_CASE("Integer Division By Zero Error")
+{
+    runConformance("div_by_zero.lsl", nullptr, nullptr, nullptr, "Math error");
 }
 
 TEST_CASE("Mono Strings")
