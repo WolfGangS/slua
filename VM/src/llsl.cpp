@@ -1452,8 +1452,9 @@ static const luaL_Reg quaternionlib[] = {
 
 int luaopen_sl_quaternion(lua_State* L, const char* name)
 {
-    int old_top = lua_gettop(L);
-    luaL_register(L, name, quaternionlib);
+    [[maybe_unused]] int old_top = lua_gettop(L);
+    lua_newtable(L);
+    luaL_register(L, NULL, quaternionlib);
 
     luaSL_pushquaternion(L, 0.0, 0.0, 0.0, 1.0);
     lua_setfield(L, -2, "identity");
@@ -1475,7 +1476,60 @@ int luaopen_sl_quaternion(lua_State* L, const char* name)
 
     lua_setreadonly(L, -1, true);
     lua_setmetatable(L, -2);
+    
+    // Make the table readonly so lua_fixallcollectable can fix it automatically
+    lua_setreadonly(L, -1, true);
+    
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, name);
+    lua_pop(L, 1);
 
+    LUAU_ASSERT(lua_gettop(L) == old_top);
+    return 1;
+}
+
+// ServerLua: callable quaternion module
+static int uuid_call(lua_State *L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_remove(L, 1);
+    return lua_uuid_ctor(L);
+}
+
+static const luaL_Reg uuidlib[] = {
+    {"create", lua_uuid_ctor},
+    {NULL, NULL},
+};
+
+int luaopen_sl_uuid(lua_State* L)
+{
+    [[maybe_unused]] int old_top = lua_gettop(L);
+    lua_newtable(L);
+    luaL_register(L, NULL, uuidlib);
+
+    // ServerLua: `quaternion()` is an alias to `quaternion.create()`, so we need to add a metatable
+    //  to the quaternion module which allows calling it.
+    lua_newtable(L);
+    lua_pushcfunction(L, uuid_call, "__call");
+    lua_setfield(L, -2, "__call");
+
+    // We need to override __iter so generalized iteration doesn't try to use __call.
+    lua_rawgetfield(L, LUA_BASEGLOBALSINDEX, "pairs");
+    // This is confusing at first, but we want a unique function identity
+    // when this shows up anywhere other than globals, otherwise we can
+    // muck up Ares serialization.
+    luau_dupcclosure(L, -1, "__iter");
+    lua_replace(L, -2);
+    lua_rawsetfield(L, -2, "__iter");
+
+    lua_setreadonly(L, -1, true);
+    lua_setmetatable(L, -2);
+    
+    // Make the table readonly so lua_fixallcollectable can fix it automatically
+    lua_setreadonly(L, -1, true);
+    
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, "uuid");
     lua_pop(L, 1);
 
     LUAU_ASSERT(lua_gettop(L) == old_top);
@@ -1497,14 +1551,10 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
     if (LUAU_IS_LSL_VM(L))
     {
         lua_pushcfunction(L, lsl_key_ctor, "uuid");
+        luau_dupcclosure(L, -1, "touuid");
+        lua_setglobal(L, "touuid");
+        lua_setglobal(L, "uuid");
     }
-    else
-    {
-        lua_pushcfunction(L, lua_uuid_ctor, "uuid");
-    }
-    luau_dupcclosure(L, -1, "touuid");
-    lua_setglobal(L, "touuid");
-    lua_setglobal(L, "uuid");
 
     lua_pushcfunction(L, lsl_to_vector, "tovector");
     lua_setglobal(L, "tovector");
@@ -1564,6 +1614,14 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
     make_weak_uuid_table(L);
     lua_pop(L, 1);
     LUAU_ASSERT(lua_gettop(L) == top);
+
+    if (!LUAU_IS_LSL_VM(L))
+    {
+        luaopen_sl_uuid(L);
+        LUAU_ASSERT(lua_gettop(L) == top);
+        lua_pushcfunction(L, lua_uuid_ctor, "touuid");
+        lua_setglobal(L, "touuid");
+    }
 
     //////
     /// Quaternions
