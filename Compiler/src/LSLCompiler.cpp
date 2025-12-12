@@ -1042,8 +1042,6 @@ bool LuauVisitor::visit(LSLUnaryExpression *un_expr)
     }
 
     // Everything below here should be a (post|pre)(incr|decr) operator operating on an lvalue.
-    auto *parent = un_expr->getParent();
-
     LUAU_ASSERT(un_expr->getChildExpr()->getNodeSubType() == NODE_LVALUE_EXPRESSION);
     auto *lvalue = (LSLLValueExpression *)un_expr->getChildExpr();
     auto *lvalue_sym = lvalue->getSymbol();
@@ -1069,7 +1067,7 @@ bool LuauVisitor::visit(LSLUnaryExpression *un_expr)
     // Especially important of mutating unary operators like `++bar` where
     // they may be their own statement, and we don't necessarily care about
     // pushing the result.
-    const bool want_result = (parent && parent->getNodeType() != NODE_STATEMENT);
+    const bool want_result = un_expr->getResultNeeded();
 
     // Pre-allocated by buildFunction() to ensure index < 256 for LOP_ADDK/SUBK
     const auto one_const_idx = addConstantUnder(lvalue->getType()->getOneValue(), UINT8_MAX);
@@ -1146,12 +1144,11 @@ bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
     // assignment is very special
     if (op == '=')
     {
-        auto *parent = bin_expr->getParent();
         // Basically, do we have to move this result for whoever asked for it.
         // Often `=` is used as if it were a statement, but it's also an expression
         // in LSL, which means that it can be used like `foo = bar = baz = 1`;
         // Only MOVE the result to the target register if we'll actually end up using it.
-        const bool want_result = (parent && parent->getNodeType() != NODE_STATEMENT);
+        const bool want_result = bin_expr->getResultNeeded();
 
         // The left-hand side of `=` _must_ be an lvalue
         LUAU_ASSERT(lhs->getNodeSubType() == NODE_LVALUE_EXPRESSION);
@@ -1160,7 +1157,7 @@ bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
 
         uint8_t source_reg;
         bool have_truncated_float = false;
-        if (auto *member = lval->getMember())
+        if (lval->getMember() != nullptr)
         {
             // Evaluate this first, it may be re-used if we need to use the result of the
             // assignment expression.
@@ -1223,8 +1220,7 @@ bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
     // An evil, demonic operator, only exists for int *= float
     if (op == OP_MUL_ASSIGN)
     {
-        auto *parent = bin_expr->getParent();
-        const bool want_result = (parent && parent->getNodeType() != NODE_STATEMENT);
+        const bool want_result = bin_expr->getResultNeeded();
 
         // assignment is special
         LUAU_ASSERT(lhs->getNodeSubType() == NODE_LVALUE_EXPRESSION);
@@ -1261,11 +1257,14 @@ bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
         mBuilder->emitABC(LOP_MOVE, source_reg, func_reg, 0);
 
         // Something actually wants to capture the result of the `*=`,
-        // pass it along.
+        // but that's not allowed in LSL. Throw a runtime error.
         if (want_result)
         {
-            mBuilder->emitABC(LOP_LSL_DOUBLE2FLOAT, floaty_reg, floaty_reg, 0);
-            maybeMove(expected_target, floaty_reg);
+            auto err_func_reg = allocReg(bin_expr);
+            pushImport(err_func_reg, "error");
+            const auto msg_const_idx = addConstantString(sref("cannot take result of integer *= float"), INT16_MAX);
+            mBuilder->emitAD(LOP_LOADK, allocReg(bin_expr), msg_const_idx);
+            mBuilder->emitABC(LOP_CALL, err_func_reg, 1 + 1, 0 + 1);
         }
         return false;
     }
