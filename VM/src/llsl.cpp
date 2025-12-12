@@ -1477,18 +1477,13 @@ int luaopen_sl_quaternion(lua_State* L, const char* name)
     lua_setreadonly(L, -1, true);
     lua_setmetatable(L, -2);
     
-    // Make the table readonly so lua_fixallcollectable can fix it automatically
-    lua_setreadonly(L, -1, true);
-    
-    lua_pushvalue(L, -1);
     lua_setglobal(L, name);
-    lua_pop(L, 1);
 
     LUAU_ASSERT(lua_gettop(L) == old_top);
     return 1;
 }
 
-// ServerLua: callable quaternion module
+// ServerLua: callable uuid module
 static int uuid_call(lua_State *L)
 {
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -1507,8 +1502,8 @@ int luaopen_sl_uuid(lua_State* L)
     lua_newtable(L);
     luaL_register(L, NULL, uuidlib);
 
-    // ServerLua: `quaternion()` is an alias to `quaternion.create()`, so we need to add a metatable
-    //  to the quaternion module which allows calling it.
+    // ServerLua: `uuid()` is an alias to `uuid.create()`, so we need to add a metatable
+    //  to the uuid module which allows calling it.
     lua_newtable(L);
     lua_pushcfunction(L, uuid_call, "__call");
     lua_setfield(L, -2, "__call");
@@ -1524,13 +1519,8 @@ int luaopen_sl_uuid(lua_State* L)
 
     lua_setreadonly(L, -1, true);
     lua_setmetatable(L, -2);
-    
-    // Make the table readonly so lua_fixallcollectable can fix it automatically
-    lua_setreadonly(L, -1, true);
-    
-    lua_pushvalue(L, -1);
+
     lua_setglobal(L, "uuid");
-    lua_pop(L, 1);
 
     LUAU_ASSERT(lua_gettop(L) == old_top);
     return 1;
