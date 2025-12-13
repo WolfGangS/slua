@@ -13,6 +13,7 @@
 #include "lbuiltins.h"
 #include "lnumutils.h"
 #include "lbytecode.h"
+#include "llsl.h"
 
 #include <cmath>
 #include <string.h>
@@ -376,18 +377,9 @@ reentry:
                 }
                 else
                 {
-                    // float -> int (matches lsl_cast() and avoids AArch64 weirdness)
+                    // float -> int (matches lsl_cast())
                     LUAU_ASSERT(ttisnumber(rb));
-                    float nval = (float)nvalue(rb);
-                    if (isfinite(nval))
-                    {
-                        setintvalue(ra, (int32_t)((int64_t)(nval)));
-                    }
-                    else
-                    {
-                        // Matches Mono behavior for non-finite values.
-                        setintvalue(ra, INT32_MIN);
-                    }
+                    setintvalue(ra, lsl_float_to_int(nvalue(rb)));
                 }
                 VM_NEXT();
             }

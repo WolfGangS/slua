@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // Must match lscript's definition!
 enum class LSLIType : uint8_t {
     LST_NULL          = 0,
@@ -96,3 +98,16 @@ int lsl_cast_list_elem_poszero(lua_State *L);
 void conj_quat(float *quat);
 void rot_vec(const float *vec, const float *rot, float *res);
 void copy_quat(float *dest, const float *src);
+
+// Convert double to int32, returning INT32_MIN for NaN, Inf, or out-of-range values.
+// Matches Mono's unspecified overflow behavior.
+inline int32_t lsl_float_to_int(double nval)
+{
+    constexpr double kMaxInt32 = 2147483648.0;
+    if (nval >= -kMaxInt32 && nval < kMaxInt32)
+    {
+        return (int32_t)nval;
+    }
+    // NaN, Inf, or out-of-range
+    return INT32_MIN;
+}

@@ -4,6 +4,7 @@
 integer F32_MAX = 16777216;
 // Value we expect if the value was truncated to float32 space.
 integer F32_TRUNCATED = 16777215;
+integer INT32_MIN = 0x80000000;
 float DELTA = 5;
 float g_f;
 
@@ -102,7 +103,23 @@ default
         checkTruth("integer->float cast", (integer)((float)(F32_MAX + 5) - 5) == F32_MAX);
 
         // This is _not_ meant to roundtrip correctly. int->float returns a double but float->int takes a float32.
-        checkTruth("integer->float->integer cast", ((integer)((float)0x7FffFFfe)) == -2147483648);
+        checkTruth("integer->float->integer cast", ((integer)((float)0x7FffFFfe)) == INT32_MIN);
+
+        // Out-of-range float values should return INT32_MIN (compile-time constant folding)
+        checkTruth("float->int overflow positive", ((integer)1e20) == INT32_MIN);
+        checkTruth("float->int overflow negative", ((integer)-1e20) == INT32_MIN);
+        checkTruth("float->int at boundary", ((integer)2147483648.0) == INT32_MIN);
+        checkTruth("float->int just under boundary", ((integer)2147483520.0) == 2147483520);
+
+        // Test runtime float->int conversion (not constant-folded)
+        float huge = 1e20;
+        checkTruth("float->int overflow positive", ((integer)huge) == INT32_MIN);
+        huge = -1e20;
+        checkTruth("float->int overflow negative", ((integer)huge) == INT32_MIN);
+        huge = 2147483648.0;
+        checkTruth("float->int at boundary", ((integer)huge) == INT32_MIN);
+        huge = 2147483520.0;
+        checkTruth("float->int just under boundary", ((integer)huge) == 2147483520);
 
         // This is _also_ not meant to roundtrip correctly. Mono has very janky precision when using the
         // F<n> format specifier, we need to replicate it. We've ported some of the Mono NumberFormatter
