@@ -1479,8 +1479,7 @@ static int lua_quaternion_slerp(lua_State *L)
     const float* b = luaSL_checkquaternion(L, 2);
     const float u = luaL_checknumber(L, 3);
 
-    float b_to[4] = {b[0], b[1], b[2], b[3]};
-    float cos_t = quaternion_dot(a, b_to);
+    float cos_t = quaternion_dot(a, b);
 
     bool bflip = false;
     if (cos_t < 0.0f)
