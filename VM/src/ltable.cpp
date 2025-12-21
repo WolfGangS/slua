@@ -39,7 +39,7 @@
 #define MAXSIZE (1 << MAXBITS)
 
 // ServerLua: alignment for large array sizes (caps wasted slots at this value - 1)
-constexpr int kLargeArrayAlign = 256;
+constexpr int kLargeArrayAlign = 128;
 
 static_assert(offsetof(LuaNode, val) == 0, "Unexpected Node memory layout, pointer cast in gval2slot is incorrect");
 
