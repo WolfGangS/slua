@@ -604,6 +604,25 @@ static int tclone(lua_State* L)
     return 1;
 }
 
+// ServerLua: shrink table to optimal size
+// Optional second arg: if true, allow moving sparse array elements to hash (may change iteration order)
+static int tshrink(lua_State* L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    LuaTable* t = hvalue(L->base);
+
+    if (t->readonly)
+        luaG_readonlyerror(L);
+
+    if (t->memcat < 2)
+        luaL_argerror(L, 1, "cannot shrink system table");
+
+    bool reorder = lua_toboolean(L, 2) != 0;
+    luaH_shrink(L, t, reorder);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
 static const luaL_Reg tab_funcs[] = {
     {"concat", tconcat},
     {"foreach", foreach},
@@ -622,6 +641,7 @@ static const luaL_Reg tab_funcs[] = {
     {"freeze", tfreeze},
     {"isfrozen", tisfrozen},
     {"clone", tclone},
+    {"shrink", tshrink},
     {NULL, NULL},
 };
 

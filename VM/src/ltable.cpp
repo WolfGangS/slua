@@ -1061,3 +1061,67 @@ void luaH_overrideiterorder(lua_State* L, LuaTable* t, int override)
         }
     }
 }
+
+// ServerLua: shrink table to optimal size
+void luaH_shrink(lua_State* L, LuaTable* t, bool reorder)
+{
+    // Shrink table to reduce memory usage.
+    // If reorder=false (default), preserves iteration order by not moving elements to hash.
+    // If reorder=true, may shrink to boundary and move sparse elements to hash.
+
+    // No-op for empty tables
+    if (!t->sizearray && !t->lsizenode)
+        return;
+
+    // Scan array: find boundary, max used index, and count sparse elements
+    int boundary = 0;
+    int max_used_idx = 0;
+    int sparse_count = 0;
+    for (int i = 0; i < t->sizearray; i++)
+    {
+        if (!ttisnil(&t->array[i]))
+        {
+            max_used_idx = i + 1;
+            if (boundary == i)
+                ++boundary;
+            else
+                ++sparse_count;
+        }
+    }
+
+    // Count hash elements
+    int hash_count = 0;
+    int orig_sizenode = sizenode(t);
+    for (int i = 0; i < orig_sizenode; ++i)
+    {
+        if (!ttisnil(gval(gnode(t, i))))
+            hash_count++;
+    }
+
+    // If reorder allowed and there are sparse elements, try shrinking to boundary
+    if (reorder && sparse_count > 0)
+    {
+        // We're allowed to move things to the hash part of the table, check if it would be cheaper
+        // memory-wise to do that than it would be for us to just shrink array and node to their minimum
+        // required capacities.
+        // Cost in `TValue`-equivalents: array slots cost 1, hash slots cost 2 (LuaNode is 2x TValue)
+        int new_hash_count = hash_count + sparse_count;
+        // hash portion resizes in pow2 increments, sometimes putting things in the hash is basically
+        // free if we're already using it.
+        int reorder_hash_capacity = 1 << ceillog2(new_hash_count);
+        int no_reorder_hash_capacity = hash_count == 0 ? 0 : (1 << ceillog2(hash_count));
+        int reorder_cost = boundary + (2 * reorder_hash_capacity);
+        int no_reorder_cost = max_used_idx + (2 * no_reorder_hash_capacity);
+
+        // Would this be smaller memory-wise if we moved some things to the hash portion?
+        if (reorder_cost < no_reorder_cost)
+        {
+            resize(L, t, boundary, new_hash_count);
+            return;
+        }
+    }
+
+    // Default: shrink to max_used_idx (no elements move, preserves iteration order)
+    if (max_used_idx < t->sizearray || hash_count < orig_sizenode)
+        resize(L, t, max_used_idx, hash_count);
+}

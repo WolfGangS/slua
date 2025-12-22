@@ -57,6 +57,7 @@
 #include "../apr/apr_base64.h"
 #include "../lgc.h"
 #include "../lapi.h"
+#include "../ltable.h"
 
 // ServerLua: internal configuration
 #define CJSON_MODNAME "lljson"
@@ -2081,6 +2082,13 @@ static void json_parse_array_context(lua_State *l, json_parse_t *json)
         json_next_token(json, &token);
 
         if (token.type == T_ARR_END) {
+            // ServerLua: shrink the array to fit the contents, if necessary
+            LuaTable *t = hvalue(luaA_toobject(l, -1));
+            if (t->sizearray != i)
+            {
+                luaH_resizearray(l, t, i);
+            }
+
             json_decode_ascend(json);
             return;
         }

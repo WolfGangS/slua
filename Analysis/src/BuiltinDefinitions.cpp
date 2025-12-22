@@ -544,12 +544,16 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
             TypeId idTy = arena.addType(FunctionType{{genericTy}, {}, thePack, thePack});
             inferGenericPolarities(NotNull{&globals.globalTypes}, NotNull{globalScope}, idTy);
             ttv->props["clone"] = makeProperty(idTy, "@luau/global/table.clone");
+            // ServerLua: shrink table to optimal size
+            ttv->props["shrink"] = makeProperty(idTy, "@luau/global/table.shrink");
         }
         else
         {
             // tabTy is a generic table type which we can't express via declaration syntax yet
             ttv->props["freeze"] = makeProperty(makeFunction(arena, std::nullopt, {tabTy}, {tabTy}), "@luau/global/table.freeze");
             ttv->props["clone"] = makeProperty(makeFunction(arena, std::nullopt, {tabTy}, {tabTy}), "@luau/global/table.clone");
+            // ServerLua: shrink table to optimal size
+            ttv->props["shrink"] = makeProperty(makeFunction(arena, std::nullopt, {tabTy}, {tabTy}), "@luau/global/table.shrink");
         }
 
         ttv->props["getn"].deprecated = true;

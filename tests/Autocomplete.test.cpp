@@ -367,7 +367,7 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "get_member_completions")
 
     auto ac = autocomplete('1');
 
-    CHECK_EQ(17, ac.entryMap.size());
+    CHECK_EQ(18, ac.entryMap.size());  // ServerLua: +1 for table.shrink
     CHECK(ac.entryMap.count("find"));
     CHECK(ac.entryMap.count("pack"));
     LUAU_CHECK_HAS_NO_KEY(ac.entryMap, "math");

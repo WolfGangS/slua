@@ -36,6 +36,9 @@ LUAI_FUNC LuaTable* luaH_clone(lua_State* L, LuaTable* tt);
 LUAI_FUNC void luaH_clear(LuaTable* tt);
 // ServerLua: set whether or not a custom iter order should be used
 LUAI_FUNC void luaH_overrideiterorder(lua_State* L, LuaTable* t, int override);
+// ServerLua: shrink table to optimal size
+// If reorder=true, may move sparse array elements to hash (changes iteration order)
+LUAI_FUNC void luaH_shrink(lua_State* L, LuaTable* t, bool reorder);
 
 #define luaH_setslot(L, t, slot, key) (invalidateTMcache(t), (slot == luaO_nilobject ? luaH_newkey(L, t, key) : cast_to(TValue*, slot)))
 
