@@ -34,18 +34,16 @@
 
 LUAU_FASTFLAG(DebugLuauMagicTypes)
 
-LUAU_FASTFLAG(LuauExplicitTypeExpressionInstantiation)
-LUAU_FASTFLAG(LuauNoMoreComparisonTypeFunctions)
-LUAU_FASTFLAG(LuauTrackUniqueness)
+LUAU_FASTFLAG(LuauExplicitTypeInstantiationSyntax)
+LUAU_FASTFLAG(LuauExplicitTypeInstantiationSupport)
 
 LUAU_FASTFLAGVARIABLE(LuauIceLess)
 LUAU_FASTFLAGVARIABLE(LuauCheckForInWithSubtyping3)
-LUAU_FASTFLAGVARIABLE(LuauNoOrderingTypeFunctions)
-LUAU_FASTFLAGVARIABLE(LuauNewOverloadResolver)
-LUAU_FASTFLAG(LuauPassBindableGenericsByReference)
-LUAU_FASTFLAG(LuauSimplifyIntersectionNoTreeSet)
-LUAU_FASTFLAG(LuauAddRefinementToAssertions)
-LUAU_FASTFLAGVARIABLE(LuauSuppressIndexingIntoError)
+LUAU_FASTFLAGVARIABLE(LuauHandleFunctionOversaturation)
+LUAU_FASTFLAG(LuauBetterTypeMismatchErrors)
+LUAU_FASTFLAGVARIABLE(LuauFixIndexingUnionWithNonTable)
+LUAU_FASTFLAGVARIABLE(LuauCheckFunctionStatementTypes)
+LUAU_FASTFLAG(LuauReworkInfiniteTypeFinder)
 
 namespace Luau
 {
@@ -286,7 +284,6 @@ struct InternalTypeFunctionFinder : TypeOnceVisitor
 
 void check(
     NotNull<BuiltinTypes> builtinTypes,
-    NotNull<Simplifier> simplifier,
     NotNull<TypeFunctionRuntime> typeFunctionRuntime,
     NotNull<UnifierSharedState> unifierState,
     NotNull<TypeCheckLimits> limits,
@@ -297,7 +294,7 @@ void check(
 {
     LUAU_TIMETRACE_SCOPE("check", "Typechecking");
 
-    TypeChecker2 typeChecker{builtinTypes, simplifier, typeFunctionRuntime, unifierState, limits, logger, &sourceModule, module};
+    TypeChecker2 typeChecker{builtinTypes, typeFunctionRuntime, unifierState, limits, logger, &sourceModule, module};
 
     typeChecker.visit(sourceModule.root);
 
@@ -308,7 +305,6 @@ void check(
 
 TypeChecker2::TypeChecker2(
     NotNull<BuiltinTypes> builtinTypes,
-    NotNull<Simplifier> simplifier,
     NotNull<TypeFunctionRuntime> typeFunctionRuntime,
     NotNull<UnifierSharedState> unifierState,
     NotNull<TypeCheckLimits> limits,
@@ -317,7 +313,6 @@ TypeChecker2::TypeChecker2(
     Module* module
 )
     : builtinTypes(builtinTypes)
-    , simplifier(simplifier)
     , typeFunctionRuntime(typeFunctionRuntime)
     , logger(logger)
     , limits(limits)
@@ -325,7 +320,7 @@ TypeChecker2::TypeChecker2(
     , sourceModule(sourceModule)
     , module(module)
     , normalizer{&module->internalTypes, builtinTypes, unifierState, SolverMode::New, /* cacheInhabitance */ true}
-    , _subtyping{builtinTypes, NotNull{&module->internalTypes}, simplifier, NotNull{&normalizer}, typeFunctionRuntime, NotNull{unifierState->iceHandler}}
+    , _subtyping{builtinTypes, NotNull{&module->internalTypes}, NotNull{&normalizer}, typeFunctionRuntime, NotNull{unifierState->iceHandler}}
     , subtyping(&_subtyping)
 {
 }
@@ -503,9 +498,7 @@ TypeId TypeChecker2::checkForTypeFunctionInhabitance(TypeId instance, Location l
         return instance;
     seenTypeFunctionInstances.insert(instance);
 
-    TypeFunctionContext context{
-        NotNull{&module->internalTypes}, builtinTypes, stack.back(), simplifier, NotNull{&normalizer}, typeFunctionRuntime, ice, limits
-    };
+    TypeFunctionContext context{NotNull{&module->internalTypes}, builtinTypes, stack.back(), NotNull{&normalizer}, typeFunctionRuntime, ice, limits};
 
     ErrorVec errors = reduceTypeFunctions(instance, location, NotNull{&context}, true).errors;
     if (!isErrorSuppressing(location, instance))
@@ -1298,6 +1291,24 @@ void TypeChecker2::visit(AstStatFunction* stat)
 {
     visit(stat->name, ValueContext::LValue);
     visit(stat->func);
+
+    if (FFlag::LuauCheckFunctionStatementTypes)
+    {
+        // Consider a block of code like:
+        //
+        //  type X = { x: (number) -> number }
+        //  function f(t: X)
+        //      function t.x(a: string): string
+        //          return "Hello, " .. a
+        //      end
+        //  end
+        //
+        // We need to check that the function we're assigning to `t.x` has the
+        // correct type, like when we're assigning an expression to a local
+        auto lhsType = lookupType(stat->name);
+        auto rhsType = lookupType(stat->func);
+        testIsSubtype(rhsType, lhsType, stat->func->location);
+    }
 }
 
 void TypeChecker2::visit(AstStatLocalFunction* stat)
@@ -1324,8 +1335,16 @@ void TypeChecker2::visit(AstStatTypeAlias* stat)
 
     if (const Scope* scope = findInnermostScope(stat->location))
     {
-        if (scope->isInvalidTypeAliasName(stat->name.value))
-            reportError(RecursiveRestraintViolation{}, stat->location);
+        if (FFlag::LuauReworkInfiniteTypeFinder)
+        {
+            if (auto loc = scope->isInvalidTypeAlias(stat->name.value))
+                reportError(RecursiveRestraintViolation{}, *loc);
+        }
+        else
+        {
+            if (scope->isInvalidTypeAliasName_DEPRECATED(stat->name.value))
+                reportError(RecursiveRestraintViolation{}, stat->location);
+        }
     }
 
     visitGenerics(stat->generics, stat->genericPacks);
@@ -1415,7 +1434,7 @@ void TypeChecker2::visit(AstExpr* expr, ValueContext context)
         return visit(e);
     else if (auto e = expr->as<AstExprInstantiate>())
     {
-        LUAU_ASSERT(FFlag::LuauExplicitTypeExpressionInstantiation);
+        LUAU_ASSERT(FFlag::LuauExplicitTypeInstantiationSyntax);
         return visit(e);
     }
     else if (auto e = expr->as<AstExprInterpString>())
@@ -1574,7 +1593,7 @@ void TypeChecker2::visitCall(AstExprCall* call)
         return;
     }
 
-    if (FFlag::LuauExplicitTypeExpressionInstantiation)
+    if (FFlag::LuauExplicitTypeInstantiationSupport)
     {
         if (call->typeArguments.size)
         {
@@ -1625,47 +1644,79 @@ void TypeChecker2::visitCall(AstExprCall* call)
     {
         size_t selfOffset = call->self ? 1 : 0;
 
-        auto [paramsHead, _] = extendTypePack(module->internalTypes, builtinTypes, fty->argTypes, call->args.size + selfOffset);
+        std::vector<TypeId> paramsHead = extendTypePack(module->internalTypes, builtinTypes, fty->argTypes, call->args.size + selfOffset).head;
 
-        for (size_t idx = 0; idx < call->args.size - 1; ++idx)
+        if (FFlag::LuauHandleFunctionOversaturation)
         {
-            auto argExpr = call->args.data[idx];
-            auto argExprType = lookupType(argExpr);
-            argExprs.push_back(argExpr);
-            if (idx + selfOffset >= paramsHead.size() || isErrorSuppressing(argExpr->location, argExprType))
+            for (size_t idx = 0; idx < call->args.size; ++idx)
             {
-                args.head.push_back(argExprType);
-                continue;
-            }
-            testLiteralOrAstTypeIsSubtype(argExpr, paramsHead[idx + selfOffset]);
-            args.head.push_back(paramsHead[idx + selfOffset]);
-        }
+                AstExpr* argExpr = call->args.data[idx];
 
-        auto lastExpr = call->args.data[call->args.size - 1];
-        argExprs.push_back(lastExpr);
+                // The last argument might be an ordinary value, but it can also be an entire pack.
+                if (idx == call->args.size - 1)
+                {
+                    if (TypePackId* lastArgPack = module->astTypePacks.find(argExpr))
+                    {
+                        auto [lastArgHead, lastArgTail] = flatten(*lastArgPack);
+                        args.head.insert(args.head.end(), lastArgHead.begin(), lastArgHead.end());
+                        args.tail = lastArgTail;
+                        continue;
+                    }
+                }
 
-        if (auto argTail = module->astTypePacks.find(lastExpr))
-        {
-            auto [lastExprHead, lastExprTail] = flatten(*argTail);
-            args.head.insert(args.head.end(), lastExprHead.begin(), lastExprHead.end());
-            args.tail = lastExprTail;
-        }
-        else if (paramsHead.size() >= call->args.size + selfOffset)
-        {
-            auto lastType = paramsHead[call->args.size - 1 + selfOffset];
-            auto lastExprType = lookupType(lastExpr);
-            if (isErrorSuppressing(lastExpr->location, lastExprType))
-            {
-                args.head.push_back(lastExprType);
-            }
-            else
-            {
-                testLiteralOrAstTypeIsSubtype(lastExpr, lastType);
-                args.head.push_back(lastType);
+                TypeId argExprType = lookupType(argExpr);
+                argExprs.push_back(argExpr);
+                if (idx + selfOffset >= paramsHead.size() || isErrorSuppressing(argExpr->location, argExprType))
+                    args.head.push_back(argExprType);
+                else
+                {
+                    testLiteralOrAstTypeIsSubtype(argExpr, paramsHead[idx + selfOffset]);
+                    args.head.push_back(paramsHead[idx + selfOffset]);
+                }
             }
         }
         else
-            args.tail = builtinTypes->anyTypePack;
+        {
+            for (size_t idx = 0; idx < call->args.size - 1; ++idx)
+            {
+                auto argExpr = call->args.data[idx];
+                auto argExprType = lookupType(argExpr);
+                argExprs.push_back(argExpr);
+                if (idx + selfOffset >= paramsHead.size() || isErrorSuppressing(argExpr->location, argExprType))
+                {
+                    args.head.push_back(argExprType);
+                    continue;
+                }
+                testLiteralOrAstTypeIsSubtype(argExpr, paramsHead[idx + selfOffset]);
+                args.head.push_back(paramsHead[idx + selfOffset]);
+            }
+
+            auto lastExpr = call->args.data[call->args.size - 1];
+            argExprs.push_back(lastExpr);
+
+            if (auto argTail = module->astTypePacks.find(lastExpr))
+            {
+                auto [lastExprHead, lastExprTail] = flatten(*argTail);
+                args.head.insert(args.head.end(), lastExprHead.begin(), lastExprHead.end());
+                args.tail = lastExprTail;
+            }
+            else if (paramsHead.size() >= call->args.size + selfOffset)
+            {
+                auto lastType = paramsHead[call->args.size - 1 + selfOffset];
+                auto lastExprType = lookupType(lastExpr);
+                if (isErrorSuppressing(lastExpr->location, lastExprType))
+                {
+                    args.head.push_back(lastExprType);
+                }
+                else
+                {
+                    testLiteralOrAstTypeIsSubtype(lastExpr, lastType);
+                    args.head.push_back(lastType);
+                }
+            }
+            else
+                args.tail = builtinTypes->anyTypePack;
+        }
     }
     else
     {
@@ -1706,7 +1757,6 @@ void TypeChecker2::visitCall(AstExprCall* call)
     OverloadResolver resolver{
         builtinTypes,
         NotNull{&module->internalTypes},
-        simplifier,
         NotNull{&normalizer},
         typeFunctionRuntime,
         NotNull{stack.back()},
@@ -1715,216 +1765,128 @@ void TypeChecker2::visitCall(AstExprCall* call)
         call->location,
     };
     DenseHashSet<TypeId> uniqueTypes{nullptr};
-    if (FFlag::LuauTrackUniqueness)
-        findUniqueTypes(NotNull{&uniqueTypes}, argExprs, NotNull{&module->astTypes});
+    findUniqueTypes(NotNull{&uniqueTypes}, argExprs, NotNull{&module->astTypes});
 
-    if (FFlag::LuauNewOverloadResolver)
+    TypePackId argsPack = module->internalTypes.addTypePack(args);
+    const OverloadResolution result2 = resolver.resolveOverload(fnTy, argsPack, call->func->location, NotNull{&uniqueTypes}, false);
+
+    if (!result2.potentialOverloads.empty())
+        reportError(InternalError{"Internal error: outstanding free or blocked type in function call"}, call->location);
+
+    /*
+     * If one overload matches, stop.  Nothing to report.
+     *
+     * If 2 or more overloads match, report that it is ambiguous.  List the overloads that match.
+     *
+     * If 0 overloads match:
+     *      If multiple overloads are arity matches, but are nonviable, report MultipleNonviableOverloads and report the overloads that have matching
+     * arities. Note: Error suppressing overloads are ignored in this calculation! If only one overload is an arity match but it is nonviable, report
+     * subtyping errors for just that.
+     *
+     *      If no overloads are arity matches, list all overloads.
+     */
+
+    if (!result2.ok.empty())
     {
-        TypePackId argsPack = module->internalTypes.addTypePack(args);
-        const OverloadResolution result2 = resolver.resolveOverload(fnTy, argsPack, call->func->location, NotNull{&uniqueTypes}, false);
+        if (result2.ok.size() > 1)
+            reportError(AmbiguousFunctionCall{fnTy, argsPack}, call->location);
+        return;
+    }
 
-        // We should have a fully solved type graph at this point.
-        // Maybe we should report an InternalError here instead?
-        LUAU_ASSERT(result2.potentialOverloads.empty());
+    std::vector<TypeId> overloadsToReport;
 
-        /*
-         * If one overload matches, stop.  Nothing to report.
-         *
-         * If 2 or more overloads match, report that it is ambiguous.  List the overloads that match.
-         *
-         * If 0 overloads match:
-         *      If multiple overloads are arity matches, but are nonviable, report MultipleNonviableOverloads and report the overloads that have matching arities.
-         *          Note: Error suppressing overloads are ignored in this calculation!
-         *      If only one overload is an arity match but it is nonviable, report subtyping errors for just that.
-         *
-         *      If no overloads are arity matches, list all overloads.
-         */
-
-        // TODO: Handle the case where multiple overloads are viable.
-        if (!result2.ok.empty())
-            return;
-
-        std::vector<TypeId> overloadsToReport;
-
-        if (1 == result2.incompatibleOverloads.size())
+    if (1 == result2.incompatibleOverloads.size())
+    {
+        for (const auto& [ty, reasons] : result2.incompatibleOverloads)
         {
-            for (const auto& [ty, reasons] : result2.incompatibleOverloads)
+            if (const SubtypingReasonings* sr = get_if<SubtypingReasonings>(&reasons))
             {
-                if (const SubtypingReasonings* sr = get_if<SubtypingReasonings>(&reasons))
-                {
-                    for (const SubtypingReasoning& reason : *sr)
-                        resolver.reportErrors(module->errors, ty, call->func->location, module->name, argsPack, argExprs, reason);
-                }
-                else if (const auto errorVec = get_if<ErrorVec>(&reasons))
-                {
-                    reportErrors(*errorVec);
-                }
-                else
-                    LUAU_ASSERT(!"Unreachable");
+                for (const SubtypingReasoning& reason : *sr)
+                    resolver.reportErrors(module->errors, ty, call->func->location, module->name, argsPack, argExprs, reason);
             }
-
-            return;
+            else if (const auto errorVec = get_if<ErrorVec>(&reasons))
+            {
+                reportErrors(*errorVec);
+            }
+            else
+                LUAU_ASSERT(!"Unreachable");
         }
 
-        // TODO: arity mismatches need expected/actual counts.
-        const auto [argHead, _argTail] = flatten(argsPack);
-        if (result2.incompatibleOverloads.size() > 1)
+        return;
+    }
+
+    // TODO: arity mismatches need expected/actual counts.
+    const auto [argHead, _argTail] = flatten(argsPack);
+    if (result2.incompatibleOverloads.size() > 1)
+    {
+        overloadsToReport.reserve(result2.nonFunctions.size());
+        for (const auto& [overloadTy, _reasons] : result2.incompatibleOverloads)
         {
-            overloadsToReport.reserve(result2.nonFunctions.size());
-            for (const auto& [overloadTy, _reasons] : result2.incompatibleOverloads)
-            {
-                if (!isErrorSuppressing(call->location, overloadTy))
-                    overloadsToReport.emplace_back(overloadTy);
-            }
+            if (!isErrorSuppressing(call->location, overloadTy))
+                overloadsToReport.emplace_back(overloadTy);
+        }
 
-            // If all nonviable overloads are error suppressing, don't report anything.
-            if (!overloadsToReport.empty())
-            {
-                reportError(MultipleNonviableOverloads{argHead.size()}, call->location);
-                reportAvailableOverloads(module->errors, call->location, overloadsToReport);
-            }
+        // If all nonviable overloads are error suppressing, don't report anything.
+        if (!overloadsToReport.empty())
+        {
+            reportError(MultipleNonviableOverloads{argHead.size()}, call->location);
+            reportAvailableOverloads(module->errors, call->location, overloadsToReport);
+        }
 
+        return;
+    }
+
+    LUAU_ASSERT(0 == result2.ok.size() && 0 == result2.incompatibleOverloads.size());
+
+    if (1 == result2.arityMismatches.size())
+    {
+        const TypeId fnTy = follow(result2.arityMismatches.front());
+        const FunctionType* fn = get<FunctionType>(fnTy);
+        LUAU_ASSERT(fn);
+
+        if (fn)
+        {
+            const bool isVariadic = Luau::isVariadic(fn->argTypes);
+
+            auto [minParams, optMaxParams] = getParameterExtents(TxnLog::empty(), fn->argTypes);
+            reportError(CountMismatch{minParams, optMaxParams, argHead.size(), CountMismatch::Arg, isVariadic}, call->func->location);
             return;
         }
+    }
 
-        LUAU_ASSERT(0 == result2.ok.size() && 0 == result2.incompatibleOverloads.size());
+    if (!result2.arityMismatches.empty())
+    {
+        std::stringstream ss;
+        ss << "No overload for function accepts " << argHead.size() << " arguments.";
+        reportError(GenericError{ss.str()}, call->func->location);
+        reportAvailableOverloads(module->errors, call->func->location, result2.arityMismatches);
+        return;
+    }
 
-        if (1 == result2.arityMismatches.size())
-        {
-            const TypeId fnTy = follow(result2.arityMismatches.front());
-            const FunctionType* fn = get<FunctionType>(fnTy);
-            LUAU_ASSERT(fn);
-
-            if (fn)
-            {
-                const bool isVariadic = Luau::isVariadic(fn->argTypes);
-
-                auto [minParams, optMaxParams] = getParameterExtents(TxnLog::empty(), fn->argTypes);
-                reportError(
-                    CountMismatch{
-                        minParams,
-                        optMaxParams,
-                        argHead.size(),
-                        CountMismatch::Arg,
-                        isVariadic
-                    },
-                    call->func->location
-                );
-                return;
-            }
-        }
-
-        if (!result2.arityMismatches.empty())
-        {
-            std::stringstream ss;
-            ss << "No overload for function accepts " << argHead.size() << " arguments.";
-            reportError(GenericError{ss.str()}, call->func->location);
-            reportAvailableOverloads(module->errors, call->func->location, result2.arityMismatches);
-            return;
-        }
-
-        if (!result2.nonFunctions.empty())
-        {
+    if (!result2.nonFunctions.empty())
+    {
+        auto norm = normalizer.normalize(fnTy);
+        if (!norm || normalizer.isInhabited(norm.get()) == NormalizationResult::HitLimits)
+            reportError(NormalizationTooComplex{}, call->func->location);
+        // At this point norm is non-null and inhabited.
+        if (!norm->shouldSuppressErrors())
             reportError(CannotCallNonFunction{fnTy}, call->func->location);
-            return;
-        }
-
         return;
     }
 
-    resolver.resolve(fnTy, &args, call->func, &argExprs, NotNull{&uniqueTypes});
-
-    auto norm = normalizer.normalize(fnTy);
-    if (!norm)
-        reportError(NormalizationTooComplex{}, call->func->location);
-    auto isInhabited = normalizer.isInhabited(norm.get());
-    if (isInhabited == NormalizationResult::HitLimits)
-        reportError(NormalizationTooComplex{}, call->func->location);
-
-    if (norm && norm->shouldSuppressErrors())
-        return; // error suppressing function type!
-    else if (!resolver.ok.empty())
-        return; // We found a call that works, so this is ok.
-    else if (!norm || isInhabited == NormalizationResult::False)
-        return; // Ok. Calling an uninhabited type is no-op.
-    else if (!resolver.nonviableOverloads.empty())
-    {
-        const bool reportedErrors =
-            reportNonviableOverloadErrors(resolver.nonviableOverloads, call->func->location, args.head.size(), call->location);
-        if (!reportedErrors)
-            return; // We did not report any errors, so we can just return.
-    }
-    else if (!resolver.arityMismatches.empty())
-    {
-        if (resolver.arityMismatches.size() == 1)
-            reportErrors(resolver.arityMismatches.front().second);
-        else
-        {
-            std::string s = "No overload for function accepts ";
-            s += std::to_string(args.head.size());
-            s += " arguments.";
-            reportError(GenericError{std::move(s)}, call->location);
-        }
-    }
-    else if (!resolver.nonFunctions.empty())
-        reportError(CannotCallNonFunction{fnTy}, call->func->location);
-    else
-        LUAU_ASSERT(!"Generating the best possible error from this function call resolution was inexhaustive?");
-
-    if (resolver.nonviableOverloads.size() <= 1 && resolver.arityMismatches.size() <= 1)
-        return;
-
-    std::string s = "Available overloads: ";
-
-    std::vector<TypeId> overloads;
-    if (resolver.nonviableOverloads.empty())
-    {
-        for (const auto& [ty, p] : resolver.resolution)
-        {
-            if (p.first == OverloadResolver::TypeIsNotAFunction)
-                continue;
-
-            overloads.push_back(ty);
-        }
-    }
-    else
-    {
-        for (const auto& [ty, _] : resolver.nonviableOverloads)
-            overloads.push_back(ty);
-    }
-
-    if (overloads.size() <= 1)
-        return;
-
-    for (size_t i = 0; i < overloads.size(); ++i)
-    {
-        if (i > 0)
-            s += (i == overloads.size() - 1) ? "; and " : "; ";
-
-        s += toString(overloads[i]);
-    }
-
-    reportError(ExtraInformation{std::move(s)}, call->func->location);
 }
 
 void TypeChecker2::visit(AstExprCall* call)
 {
     std::optional<InConditionalContext> flipper;
-    if (FFlag::LuauAddRefinementToAssertions)
-    {
-        // We want to preserve the existing conditional context if we are in a `typeof` call.
-        if (!matchTypeOf(*call))
-            flipper.emplace(&typeContext, TypeContext::Default);
 
-        visit(call->func, ValueContext::RValue);
-    }
-    else
-    {
-        InConditionalContext flipper(&typeContext, TypeContext::Default);
-        visit(call->func, ValueContext::RValue);
-    }
+    // We want to preserve the existing conditional context if we are in a `typeof` call.
+    if (!matchTypeOf(*call))
+        flipper.emplace(&typeContext, TypeContext::Default);
 
-    if (FFlag::LuauAddRefinementToAssertions && matchAssert(*call) && call->args.size > 0)
+    visit(call->func, ValueContext::RValue);
+
+    if (matchAssert(*call) && call->args.size > 0)
     {
         {
             InConditionalContext flipper(&typeContext);
@@ -2080,21 +2042,19 @@ void TypeChecker2::visit(AstExprIndexExpr* indexExpr, ValueContext context)
         // if all of the typeArguments are a table type, the union must be a table, and so we shouldn't error.
         if (!std::all_of(begin(ut), end(ut), getTableType))
         {
-            if (FFlag::LuauSuppressIndexingIntoError)
+            switch (shouldSuppressErrors(NotNull{&normalizer}, exprType))
             {
-                switch (shouldSuppressErrors(NotNull{&normalizer}, exprType))
-                {
-                case ErrorSuppression::Suppress:
-                    break;
-                case ErrorSuppression::NormalizationFailed:
-                    reportError(NormalizationTooComplex{}, indexExpr->location);
-                    [[fallthrough]];
-                case ErrorSuppression::DoNotSuppress:
+            case ErrorSuppression::Suppress:
+                break;
+            case ErrorSuppression::NormalizationFailed:
+                reportError(NormalizationTooComplex{}, indexExpr->location);
+                [[fallthrough]];
+            case ErrorSuppression::DoNotSuppress:
+                if (FFlag::LuauFixIndexingUnionWithNonTable)
+                    reportError(NotATable{exprType}, indexExpr->location);
+                else
                     reportError(OptionalValueAccess{exprType}, indexExpr->location);
-                }
             }
-            else
-                reportError(NotATable{exprType}, indexExpr->location);
         }
     }
     else if (auto it = get<IntersectionType>(exprType))
@@ -2442,16 +2402,13 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
     }
 
     NormalizationResult typesHaveIntersection = normalizer.isIntersectionInhabited(leftType, rightType);
-    if (FFlag::LuauNoMoreComparisonTypeFunctions)
+    if (isEquality || isComparison)
     {
-        if (isEquality || isComparison)
+        // As a special exception, we allow anything to be compared to nil.
+        if (!isOkToCompare(normalizer, typesHaveIntersection, normLeft, normRight))
         {
-            // As a special exception, we allow anything to be compared to nil.
-            if (!isOkToCompare(normalizer, typesHaveIntersection, normLeft, normRight))
-            {
-                reportError(CannotCompareUnrelatedTypes{leftType, rightType, expr->op}, expr->location);
-                return builtinTypes->errorType;
-            }
+            reportError(CannotCompareUnrelatedTypes{leftType, rightType, expr->op}, expr->location);
+            return builtinTypes->errorType;
         }
     }
 
@@ -2608,23 +2565,7 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
             {
                 if (isComparison)
                 {
-                    if (FFlag::LuauNoOrderingTypeFunctions)
-                    {
-                        reportError(CannotCompareUnrelatedTypes{leftType, rightType, expr->op}, expr->location);
-                    }
-                    else
-                    {
-                        reportError(
-                            GenericError{format(
-                                "Types '%s' and '%s' cannot be compared with %s because neither type's metatable has a '%s' metamethod",
-                                toString(leftType).c_str(),
-                                toString(rightType).c_str(),
-                                toString(expr->op).c_str(),
-                                it->second
-                            )},
-                            expr->location
-                        );
-                    }
+                    reportError(CannotCompareUnrelatedTypes{leftType, rightType, expr->op}, expr->location);
                 }
                 else
                 {
@@ -2646,22 +2587,7 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
             {
                 if (isComparison)
                 {
-                    if (FFlag::LuauNoOrderingTypeFunctions)
-                    {
-                        reportError(CannotCompareUnrelatedTypes{leftType, rightType, expr->op}, expr->location);
-                    }
-                    else
-                    {
-                        reportError(
-                            GenericError{format(
-                                "Types '%s' and '%s' cannot be compared with %s because neither type has a metatable",
-                                toString(leftType).c_str(),
-                                toString(rightType).c_str(),
-                                toString(expr->op).c_str()
-                            )},
-                            expr->location
-                        );
-                    }
+                    reportError(CannotCompareUnrelatedTypes{leftType, rightType, expr->op}, expr->location);
                 }
                 else
                 {
@@ -2713,37 +2639,18 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
         if (normLeft && normalizer.isInhabited(normLeft.get()) == NormalizationResult::False)
             return builtinTypes->booleanType;
 
-        if (FFlag::LuauNoOrderingTypeFunctions)
+        // This could be a little wasteful, as we already have normalized
+        // types, but correctly handles cases like `_: (T & number) <= _: (T & number)`.
+        if (subtyping->isSubtype(leftType, builtinTypes->numberType, scope).isSubtype)
         {
-            // This could be a little wasteful, as we already have normalized
-            // typeArguments, but correctly handles cases like `_: (T & number) <= _: (T & number)`.
-
-            if (subtyping->isSubtype(leftType, builtinTypes->numberType, scope).isSubtype)
-            {
-                testIsSubtype(rightType, builtinTypes->numberType, expr->right->location);
-                return builtinTypes->booleanType;
-            }
-
-            if (subtyping->isSubtype(leftType, builtinTypes->stringType, scope).isSubtype)
-            {
-                testIsSubtype(rightType, builtinTypes->stringType, expr->right->location);
-                return builtinTypes->booleanType;
-            }
+            testIsSubtype(rightType, builtinTypes->numberType, expr->right->location);
+            return builtinTypes->booleanType;
         }
-        else
+
+        if (subtyping->isSubtype(leftType, builtinTypes->stringType, scope).isSubtype)
         {
-
-            if (normLeft && normLeft->isExactlyNumber())
-            {
-                testIsSubtype(rightType, builtinTypes->numberType, expr->right->location);
-                return builtinTypes->booleanType;
-            }
-
-            if (normLeft && normLeft->isSubtypeOfString())
-            {
-                testIsSubtype(rightType, builtinTypes->stringType, expr->right->location);
-                return builtinTypes->booleanType;
-            }
+            testIsSubtype(rightType, builtinTypes->stringType, expr->right->location);
+            return builtinTypes->booleanType;
         }
 
         reportError(
@@ -2828,14 +2735,15 @@ void TypeChecker2::visit(AstExprIfElse* expr)
 
 void TypeChecker2::visit(AstExprInstantiate* explicitTypeInstantiation)
 {
-    LUAU_ASSERT(FFlag::LuauExplicitTypeExpressionInstantiation);
+    LUAU_ASSERT(FFlag::LuauExplicitTypeInstantiationSyntax);
     visit(explicitTypeInstantiation->expr, ValueContext::RValue);
-    checkTypeInstantiation(
-        explicitTypeInstantiation->expr,
-        lookupType(explicitTypeInstantiation->expr),
-        explicitTypeInstantiation->location,
-        explicitTypeInstantiation->typeArguments
-    );
+    if (FFlag::LuauExplicitTypeInstantiationSupport)
+        checkTypeInstantiation(
+            explicitTypeInstantiation->expr,
+            lookupType(explicitTypeInstantiation->expr),
+            explicitTypeInstantiation->location,
+            explicitTypeInstantiation->typeArguments
+        );
 }
 
 void TypeChecker2::visit(AstExprInterpString* interpString)
@@ -3180,7 +3088,7 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
             if (FFlag::LuauIceLess)
             {
                 reportError(InternalError{"Subtyping test returned a reasoning with an invalid path"}, location);
-                return {}; // TOOD test this
+                return {}; // TODO test this
             }
             else
                 ice->ice("Subtyping test returned a reasoning with an invalid path", location);
@@ -3230,7 +3138,10 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
 
         std::stringstream reason;
 
-        if (reasoning.subPath == reasoning.superPath)
+        if (FFlag::LuauBetterTypeMismatchErrors && reasoning.subPath == reasoning.superPath)
+            reason << toStringHuman(reasoning.subPath) << "`" << subLeafAsString << "` in the latter type and `" << superLeafAsString
+                   << "` in the former type, and " << baseReason;
+        else if (reasoning.subPath == reasoning.superPath)
             reason << toStringHuman(reasoning.subPath) << "`" << subLeafAsString << "` in the former type and `" << superLeafAsString
                    << "` in the latter type, and " << baseReason;
         else if (!reasoning.subPath.empty() && !reasoning.superPath.empty())
@@ -3368,22 +3279,11 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
         {
             // If we _happen_ to have an intersection of tables, let's try to
             // construct it and use it as the input to this algorithm.
-            if (FFlag::LuauSimplifyIntersectionNoTreeSet)
-            {
-                TypeIds parts;
-                parts.insert(begin(itv), end(itv));
-                TypeId simplified = simplifyIntersection(builtinTypes, NotNull{&module->internalTypes}, std::move(parts)).result;
-                if (is<TableType>(simplified))
-                    return testPotentialLiteralIsSubtype(expr, simplified);
-            }
-            else
-            {
-
-                std::set<TypeId> parts{begin(itv), end(itv)};
-                TypeId simplified = simplifyIntersection_DEPRECATED(builtinTypes, NotNull{&module->internalTypes}, std::move(parts)).result;
-                if (is<TableType>(simplified))
-                    return testPotentialLiteralIsSubtype(expr, simplified);
-            }
+            TypeIds parts;
+            parts.insert(begin(itv), end(itv));
+            TypeId simplified = simplifyIntersection(builtinTypes, NotNull{&module->internalTypes}, std::move(parts)).result;
+            if (is<TableType>(simplified))
+                return testPotentialLiteralIsSubtype(expr, simplified);
         }
 
         return testIsSubtype(exprType, expectedType, expr->location);
@@ -3503,8 +3403,7 @@ bool TypeChecker2::testIsSubtype(TypeId subTy, TypeId superTy, Location location
 bool TypeChecker2::testIsSubtype(TypePackId subTy, TypePackId superTy, Location location)
 {
     NotNull<Scope> scope{findInnermostScope(location)};
-    SubtypingResult r = FFlag::LuauPassBindableGenericsByReference ? subtyping->isSubtype(subTy, superTy, scope, {})
-                                                                   : subtyping->isSubtype_DEPRECATED(subTy, superTy, scope);
+    SubtypingResult r = subtyping->isSubtype(subTy, superTy, scope, {});
 
     if (!isErrorSuppressing(location, subTy))
     {
@@ -3801,7 +3700,7 @@ PropertyType TypeChecker2::hasIndexTypeFromType(
         {
             TypeId indexType = follow(tt->indexer->indexType);
             TypeId givenType = module->internalTypes.addType(SingletonType{StringSingleton{prop}});
-            if (isSubtype(givenType, indexType, NotNull{module->getModuleScope().get()}, builtinTypes, simplifier, *ice, SolverMode::New))
+            if (isSubtype(givenType, indexType, NotNull{module->getModuleScope().get()}, builtinTypes, *ice, SolverMode::New))
                 return {NormalizationResult::True, {tt->indexer->indexResultType}};
         }
 
@@ -3817,8 +3716,8 @@ PropertyType TypeChecker2::hasIndexTypeFromType(
             return {NormalizationResult::True, context == ValueContext::LValue ? property->writeTy : property->readTy};
         if (cls->indexer)
         {
-            TypeId inhabitatedTestType = module->internalTypes.addType(IntersectionType{{cls->indexer->indexType, astIndexExprType}});
-            return {normalizer.isInhabited(inhabitatedTestType), {cls->indexer->indexResultType}};
+            TypeId inhabitedTestType = module->internalTypes.addType(IntersectionType{{cls->indexer->indexType, astIndexExprType}});
+            return {normalizer.isInhabited(inhabitedTestType), {cls->indexer->indexResultType}};
         }
         return {NormalizationResult::False, {}};
     }
@@ -3917,13 +3816,12 @@ void TypeChecker2::checkTypeInstantiation(
     const AstArray<AstTypeOrPack>& typeArguments
 )
 {
-    LUAU_ASSERT(FFlag::LuauExplicitTypeExpressionInstantiation);
+    LUAU_ASSERT(FFlag::LuauExplicitTypeInstantiationSupport);
 
     const FunctionType* ftv = get<FunctionType>(follow(fnType));
     if (!ftv)
     {
-        InstantiateGenericsOnNonFunction::InterestingEdgeCase interestingEdgeCase =
-        InstantiateGenericsOnNonFunction::InterestingEdgeCase::None;
+        InstantiateGenericsOnNonFunction::InterestingEdgeCase interestingEdgeCase = InstantiateGenericsOnNonFunction::InterestingEdgeCase::None;
 
         if (findMetatableEntry(builtinTypes, module->errors, fnType, "__call", location).has_value())
         {

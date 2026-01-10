@@ -2,9 +2,10 @@
 #include "Luau/Ast.h"
 
 #include "Luau/Common.h"
-#include "Luau/StringUtils.h"
 
-LUAU_FASTFLAG(LuauExplicitTypeExpressionInstantiation)
+LUAU_FASTFLAGVARIABLE(LuauStandaloneParseType)
+
+LUAU_FASTFLAG(LuauExplicitTypeInstantiationSyntax)
 
 namespace Luau
 {
@@ -36,7 +37,7 @@ static void visitTypeList(AstVisitor* visitor, const AstTypeList& list)
 
 static void visitTypeOrPackArray(AstVisitor* visitor, const AstArray<AstTypeOrPack>& arrayOfTypeOrPack)
 {
-    LUAU_ASSERT(FFlag::LuauExplicitTypeExpressionInstantiation);
+    LUAU_ASSERT(FFlag::LuauExplicitTypeInstantiationSyntax);
 
     for (const AstTypeOrPack& param : arrayOfTypeOrPack)
     {
@@ -240,7 +241,7 @@ AstExprCall::AstExprCall(
     , self(self)
     , argLocation(argLocation)
 {
-    LUAU_ASSERT(FFlag::LuauExplicitTypeExpressionInstantiation || explicitTypes.size == 0);
+    LUAU_ASSERT(FFlag::LuauExplicitTypeInstantiationSyntax || explicitTypes.size == 0);
 }
 
 void AstExprCall::visit(AstVisitor* visitor)
@@ -551,11 +552,13 @@ AstExprInstantiate::AstExprInstantiate(const Location& location, AstExpr* expr, 
     , expr(expr)
     , typeArguments(types)
 {
-    LUAU_ASSERT(FFlag::LuauExplicitTypeExpressionInstantiation);
+    LUAU_ASSERT(FFlag::LuauExplicitTypeInstantiationSyntax);
 }
 
 void AstExprInstantiate::visit(AstVisitor* visitor)
 {
+    expr->visit(visitor);
+
     if (visitor->visit(this))
     {
         visitTypeOrPackArray(visitor, typeArguments);
@@ -1097,7 +1100,7 @@ void AstTypeReference::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
-        if (FFlag::LuauExplicitTypeExpressionInstantiation)
+        if (FFlag::LuauExplicitTypeInstantiationSyntax)
         {
             visitTypeOrPackArray(visitor, parameters);
         }

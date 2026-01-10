@@ -6,6 +6,7 @@
 #include "Luau/IrData.h"
 
 LUAU_FASTFLAG(LuauCodegenFloatLoadStoreProp)
+LUAU_FASTFLAG(LuauCodegenUpvalueLoadProp)
 
 namespace Luau
 {
@@ -32,6 +33,7 @@ inline bool isBlockTerminator(IrCmd cmd)
     case IrCmd::JUMP_CMP_INT:
     case IrCmd::JUMP_EQ_POINTER:
     case IrCmd::JUMP_CMP_NUM:
+    case IrCmd::JUMP_CMP_FLOAT:
     case IrCmd::JUMP_FORN_LOOP_COND:
     case IrCmd::JUMP_SLOT_MATCH:
     case IrCmd::RETURN:
@@ -90,6 +92,8 @@ inline bool hasResult(IrCmd cmd)
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
     case IrCmd::ADD_INT:
     case IrCmd::SUB_INT:
+    case IrCmd::SEXTI8_INT:
+    case IrCmd::SEXTI16_INT:
     case IrCmd::ADD_NUM:
     case IrCmd::SUB_NUM:
     case IrCmd::MUL_NUM:
@@ -105,13 +109,28 @@ inline bool hasResult(IrCmd cmd)
     case IrCmd::SQRT_NUM:
     case IrCmd::ABS_NUM:
     case IrCmd::SIGN_NUM:
+    case IrCmd::ADD_FLOAT:
+    case IrCmd::SUB_FLOAT:
+    case IrCmd::MUL_FLOAT:
+    case IrCmd::DIV_FLOAT:
+    case IrCmd::MIN_FLOAT:
+    case IrCmd::MAX_FLOAT:
+    case IrCmd::UNM_FLOAT:
+    case IrCmd::FLOOR_FLOAT:
+    case IrCmd::CEIL_FLOAT:
+    case IrCmd::SQRT_FLOAT:
+    case IrCmd::ABS_FLOAT:
+    case IrCmd::SIGN_FLOAT:
     case IrCmd::SELECT_NUM:
+    case IrCmd::SELECT_IF_TRUTHY:
     case IrCmd::ADD_VEC:
     case IrCmd::SUB_VEC:
     case IrCmd::MUL_VEC:
     case IrCmd::DIV_VEC:
-    case IrCmd::DOT_VEC:
+    case IrCmd::IDIV_VEC:
     case IrCmd::UNM_VEC:
+    case IrCmd::DOT_VEC:
+    case IrCmd::EXTRACT_VEC:
     case IrCmd::NOT_ANY:
     case IrCmd::CMP_ANY:
     case IrCmd::CMP_INT:
@@ -129,8 +148,12 @@ inline bool hasResult(IrCmd cmd)
     case IrCmd::UINT_TO_NUM:
     case IrCmd::NUM_TO_INT:
     case IrCmd::NUM_TO_UINT:
-    case IrCmd::NUM_TO_VEC:
+    case IrCmd::FLOAT_TO_NUM:
+    case IrCmd::NUM_TO_FLOAT:
+    case IrCmd::NUM_TO_VEC_DEPRECATED:
+    case IrCmd::FLOAT_TO_VEC:
     case IrCmd::TAG_VECTOR:
+    case IrCmd::TRUNCATE_UINT:
     case IrCmd::SUBSTITUTE:
     case IrCmd::INVOKE_FASTCALL:
     case IrCmd::BITAND_UINT:
@@ -157,6 +180,8 @@ inline bool hasResult(IrCmd cmd)
     case IrCmd::BUFFER_READF32:
     case IrCmd::BUFFER_READF64:
         return true;
+    case IrCmd::GET_UPVALUE:
+        return FFlag::LuauCodegenUpvalueLoadProp;
     default:
         break;
     }
@@ -209,7 +234,35 @@ inline bool hasSideEffects(IrCmd cmd)
     return !hasResult(cmd);
 }
 
+inline bool producesDirtyHighRegisterBits(IrCmd cmd)
+{
+    return cmd == IrCmd::NUM_TO_UINT || cmd == IrCmd::INVOKE_FASTCALL || cmd == IrCmd::CMP_ANY;
+}
+
 IrValueKind getCmdValueKind(IrCmd cmd);
+
+template<typename F>
+void visitArguments(IrInst& inst, F&& func)
+{
+    if (isPseudo(inst.cmd))
+        return;
+
+    func(inst.a);
+    func(inst.b);
+    func(inst.c);
+    func(inst.d);
+    func(inst.e);
+    func(inst.f);
+    func(inst.g);
+}
+template<typename F>
+bool anyArgumentMatch(IrInst& inst, F&& func)
+{
+    if (isPseudo(inst.cmd))
+        return false;
+
+    return func(inst.a) || func(inst.b) || func(inst.c) || func(inst.d) || func(inst.e) || func(inst.f) || func(inst.g);
+}
 
 bool isGCO(uint8_t tag);
 
@@ -270,6 +323,8 @@ IrBlock& getNextBlock(IrFunction& function, const std::vector<uint32_t>& sortedB
 
 // Returns next block in a chain, marked by 'constPropInBlockChains' optimization pass
 IrBlock* tryGetNextBlockInChain(IrFunction& function, IrBlock& block);
+
+bool isEntryBlock(const IrBlock& block);
 
 } // namespace CodeGen
 } // namespace Luau

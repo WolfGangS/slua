@@ -3,6 +3,7 @@
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/DenseHash.h"
 #include "Luau/Frontend.h"
+#include "Luau/Parser.h"
 #include "Luau/RequireTracer.h"
 
 #include "Fixture.h"
@@ -14,8 +15,10 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2);
+LUAU_FASTFLAG(LuauStandaloneParseType)
 LUAU_FASTFLAG(DebugLuauFreezeArena)
 LUAU_FASTFLAG(DebugLuauMagicTypes)
+LUAU_FASTFLAG(LuauBetterTypeMismatchErrors)
 
 namespace
 {
@@ -66,6 +69,20 @@ struct FrontendFixture : BuiltinsFixture
         addGlobalBinding(f.globals, "game", f.builtinTypes->anyType, "@test");
         addGlobalBinding(f.globals, "script", f.builtinTypes->anyType, "@test");
         return *frontend;
+    }
+
+    Allocator allocator_;
+    NotNull<Allocator> allocator{&allocator_};
+
+    AstNameTable nameTable_{allocator_};
+    NotNull<AstNameTable> nameTable{&nameTable_};
+
+    TypeArena arena_;
+    NotNull<TypeArena> arena{&arena_};
+
+    TypeId parseType(std::string_view src)
+    {
+        return getFrontend().parseType(allocator, nameTable, NotNull{&getFrontend().iceHandler}, TypeCheckLimits{}, arena, src);
     }
 };
 
@@ -1242,7 +1259,10 @@ TEST_CASE_FIXTURE(FrontendFixture, "parse_only")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
     CHECK_EQ("game/Gui/Modules/A", result.errors[0].moduleName);
-    CHECK_EQ("Type 'string' could not be converted into 'number'", toString(result.errors[0]));
+    if (FFlag::LuauBetterTypeMismatchErrors)
+        CHECK_EQ("Expected this to be 'number', but got 'string'", toString(result.errors[0]));
+    else
+        CHECK_EQ("Type 'string' could not be converted into 'number'", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(FrontendFixture, "markdirty_early_return")
@@ -1822,6 +1842,39 @@ TEST_CASE_FIXTURE(FrontendFixture, "queue_check_propagates_ice")
     getFrontend().queueModuleCheck("MainModule");
 
     CHECK_THROWS_AS(getFrontend().checkQueuedModules(), InternalCompilerError);
+}
+
+TEST_CASE_FIXTURE(FrontendFixture, "parse_just_a_type")
+{
+    std::string src = "(number, string) -> boolean?";
+
+    TypeArena arena;
+    Allocator allocator;
+    AstNameTable names{allocator};
+
+    BuiltinTypes builtinTypes;
+    InternalErrorReporter iceHandler;
+    TypeCheckLimits limits;
+
+    TypeId ty = getFrontend().parseType(NotNull{&allocator}, NotNull{&names}, NotNull{&iceHandler}, limits, NotNull{&arena}, src);
+
+    CHECK("(number, string) -> boolean?" == toString(ty));
+}
+
+TEST_CASE_FIXTURE(FrontendFixture, "parse_types")
+{
+    ScopedFastFlag sff{FFlag::LuauStandaloneParseType, true};
+
+    const TypeId ty1 = parseType("(number, boolean?) -> string");
+    CHECK("(number, boolean?) -> string" == toString(ty1));
+
+    CHECK_THROWS_AS(parseType("illegal Luau Syntax here"), InternalCompilerError);
+
+    const TypeId ty3 = parseType("blah<blahblah, number>");
+    CHECK(get<ErrorType>(ty3));
+
+    CHECK_THROWS_AS(parseType("number, boolean?) -> string"), InternalCompilerError);
+    CHECK_THROWS_AS(parseType("{size: number?"), InternalCompilerError);
 }
 
 TEST_SUITE_END();

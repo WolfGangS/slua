@@ -6,7 +6,9 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauExplicitTypeExpressionInstantiation)
+LUAU_FASTFLAG(LuauExplicitTypeInstantiationSyntax)
+LUAU_FASTFLAG(LuauExplicitTypeInstantiationSupport)
+LUAU_FASTFLAG(LuauBetterTypeMismatchErrors)
 
 TEST_SUITE_BEGIN("TypeInferExplicitTypeInstantiations");
 
@@ -19,7 +21,8 @@ TEST_CASE_FIXTURE(Fixture, "as_expression_correct")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -38,7 +41,8 @@ TEST_CASE_FIXTURE(Fixture, "as_expression_incorrect")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -53,7 +57,14 @@ TEST_CASE_FIXTURE(Fixture, "as_expression_incorrect")
 
         if (FFlag::LuauSolverV2)
         {
-            REQUIRE_EQ(toString(result.errors[0]), "Operator '+' could not be applied to operands of types string and number; there is no corresponding overload for __add");
+            REQUIRE_EQ(
+                toString(result.errors[0]),
+                "Operator '+' could not be applied to operands of types string and number; there is no corresponding overload for __add"
+            );
+        }
+        else if (FFlag::LuauBetterTypeMismatchErrors)
+        {
+            REQUIRE_EQ(toString(result.errors[0]), "Expected this to be 'number', but got 'string'");
         }
         else
         {
@@ -66,7 +77,8 @@ TEST_CASE_FIXTURE(Fixture, "as_stmt_correct")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -85,7 +97,8 @@ TEST_CASE_FIXTURE(Fixture, "as_stmt_incorrect")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -99,11 +112,21 @@ TEST_CASE_FIXTURE(Fixture, "as_stmt_incorrect")
         LUAU_REQUIRE_ERROR_COUNT(1, result);
         if (FFlag::LuauSolverV2)
         {
-            REQUIRE_EQ(toString(result.errors[0]), "Type 'string' could not be converted into 'boolean | number'");
+            if (FFlag::LuauBetterTypeMismatchErrors)
+                REQUIRE_EQ(toString(result.errors[0]), "Expected this to be 'boolean | number', but got 'string'");
+            else
+                REQUIRE_EQ(toString(result.errors[0]), "Type 'string' could not be converted into 'boolean | number'");
         }
         else
         {
-            REQUIRE_EQ(toString(result.errors[0]), "Type 'string' could not be converted into 'boolean | number'; none of the union options are compatible");
+            if (FFlag::LuauBetterTypeMismatchErrors)
+                REQUIRE_EQ(
+                    toString(result.errors[0]), "Expected this to be 'boolean | number', but got 'string'; none of the union options are compatible"
+                );
+            else
+                REQUIRE_EQ(
+                    toString(result.errors[0]), "Type 'string' could not be converted into 'boolean | number'; none of the union options are compatible"
+                );
         }
     }
 }
@@ -112,7 +135,8 @@ TEST_CASE_FIXTURE(Fixture, "multiple_calls")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -132,7 +156,8 @@ TEST_CASE_FIXTURE(Fixture, "anonymous_type_inferred")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -153,7 +178,8 @@ TEST_CASE_FIXTURE(Fixture, "anonymous_type_inferred")
 
 TEST_CASE_FIXTURE(Fixture, "type_packs")
 {
-    ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
     // FIXME: This triggers a GenericTypePackCountMismatch error, and it's not obvious if the
     // code for explicit types is broken, or if subtyping is broken.
@@ -171,7 +197,8 @@ TEST_CASE_FIXTURE(Fixture, "type_packs")
 
 TEST_CASE_FIXTURE(Fixture, "type_packs_method")
 {
-    ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+    ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+    ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
     // FIXME: This triggers a GenericTypePackCountMismatch error, and it's not obvious if the
     // code for explicit types is broken, or if subtyping is broken.
@@ -191,7 +218,8 @@ TEST_CASE_FIXTURE(Fixture, "type_packs_method")
 
 TEST_CASE_FIXTURE(Fixture, "type_packs_incorrect")
 {
-    ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+    ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+    ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
     // FIXME: This triggers a GenericTypePackCountMismatch error, and it's not obvious if the
     // code for explicit types is broken, or if subtyping is broken.
@@ -209,7 +237,8 @@ TEST_CASE_FIXTURE(Fixture, "type_packs_incorrect")
 
 TEST_CASE_FIXTURE(Fixture, "type_packs_incorrect_method")
 {
-    ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+    ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+    ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
     // FIXME: This triggers a GenericTypePackCountMismatch error, and it's not obvious if the
     // code for explicit types is broken, or if subtyping is broken.
@@ -231,7 +260,8 @@ TEST_CASE_FIXTURE(Fixture, "dot_index_call")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -254,7 +284,8 @@ TEST_CASE_FIXTURE(Fixture, "method_index_call")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -278,7 +309,8 @@ TEST_CASE_FIXTURE(Fixture, "stored_as_variable")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -302,7 +334,8 @@ TEST_CASE_FIXTURE(Fixture, "not_a_function")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -321,7 +354,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "metatable_call")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -345,7 +379,8 @@ TEST_CASE_FIXTURE(Fixture, "method_call_incomplete")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -369,7 +404,8 @@ TEST_CASE_FIXTURE(Fixture, "too_many_provided")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -383,11 +419,17 @@ TEST_CASE_FIXTURE(Fixture, "too_many_provided")
 
         if (FFlag::LuauSolverV2)
         {
-            REQUIRE_EQ(toString(result.errors[0]), "Too many type parameters passed to 'f', which is typed as <T>(...any) -> (). Expected at most 1 type parameter, but 2 provided.");
+            REQUIRE_EQ(
+                toString(result.errors[0]),
+                "Too many type parameters passed to 'f', which is typed as <T>(...any) -> (). Expected at most 1 type parameter, but 2 provided."
+            );
         }
         else
         {
-            REQUIRE_EQ(toString(result.errors[0]), "Too many type parameters passed to 'f', which is typed as <T>() -> (). Expected at most 1 type parameter, but 2 provided.");
+            REQUIRE_EQ(
+                toString(result.errors[0]),
+                "Too many type parameters passed to 'f', which is typed as <T>() -> (). Expected at most 1 type parameter, but 2 provided."
+            );
         }
     }
 }
@@ -396,7 +438,8 @@ TEST_CASE_FIXTURE(Fixture, "too_many_provided_type_packs")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -410,11 +453,17 @@ TEST_CASE_FIXTURE(Fixture, "too_many_provided_type_packs")
 
         if (FFlag::LuauSolverV2)
         {
-            REQUIRE_EQ(toString(result.errors[0]), "Too many type parameters passed to 'f', which is typed as <T...>(...any) -> (T...). Expected at most 1 type pack, but 2 provided.");
+            REQUIRE_EQ(
+                toString(result.errors[0]),
+                "Too many type parameters passed to 'f', which is typed as <T...>(...any) -> (T...). Expected at most 1 type pack, but 2 provided."
+            );
         }
         else
         {
-            REQUIRE_EQ(toString(result.errors[0]), "Too many type parameters passed to 'f', which is typed as <T...>() -> (T...). Expected at most 1 type pack, but 2 provided.");
+            REQUIRE_EQ(
+                toString(result.errors[0]),
+                "Too many type parameters passed to 'f', which is typed as <T...>() -> (T...). Expected at most 1 type pack, but 2 provided."
+            );
         }
     }
 }
@@ -423,7 +472,8 @@ TEST_CASE_FIXTURE(Fixture, "too_many_provided_method")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -440,11 +490,17 @@ TEST_CASE_FIXTURE(Fixture, "too_many_provided_method")
 
         if (FFlag::LuauSolverV2)
         {
-            REQUIRE_EQ(toString(result.errors[0]), "Too many type parameters passed to function typed as <T>(any) -> (). Expected at most 1 type parameter, but 2 provided.");
+            REQUIRE_EQ(
+                toString(result.errors[0]),
+                "Too many type parameters passed to function typed as <T>(any) -> (). Expected at most 1 type parameter, but 2 provided."
+            );
         }
         else
         {
-            REQUIRE_EQ(toString(result.errors[0]), "Too many type parameters passed to 't.f', which is typed as <T>(any) -> (). Expected at most 1 type parameter, but 2 provided.");
+            REQUIRE_EQ(
+                toString(result.errors[0]),
+                "Too many type parameters passed to 't.f', which is typed as <T>(any) -> (). Expected at most 1 type parameter, but 2 provided."
+            );
         }
     }
 }
@@ -453,7 +509,8 @@ TEST_CASE_FIXTURE(Fixture, "too_many_type_packs_provided_method")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -470,11 +527,17 @@ TEST_CASE_FIXTURE(Fixture, "too_many_type_packs_provided_method")
 
         if (FFlag::LuauSolverV2)
         {
-            REQUIRE_EQ(toString(result.errors[0]), "Too many type parameters passed to function typed as <T...>(any) -> (T...). Expected at most 1 type pack, but 2 provided.");
+            REQUIRE_EQ(
+                toString(result.errors[0]),
+                "Too many type parameters passed to function typed as <T...>(any) -> (T...). Expected at most 1 type pack, but 2 provided."
+            );
         }
         else
         {
-            REQUIRE_EQ(toString(result.errors[0]), "Too many type parameters passed to 't.f', which is typed as <T...>(any) -> (T...). Expected at most 1 type pack, but 2 provided.");
+            REQUIRE_EQ(
+                toString(result.errors[0]),
+                "Too many type parameters passed to 't.f', which is typed as <T...>(any) -> (T...). Expected at most 1 type pack, but 2 provided."
+            );
         }
     }
 }
@@ -483,7 +546,8 @@ TEST_CASE_FIXTURE(Fixture, "function_intersections")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
         --!strict
@@ -502,12 +566,13 @@ TEST_CASE_FIXTURE(Fixture, "incomplete_type_packs")
 {
     SUBCASE_BOTH_SOLVERS()
     {
-        ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+        ScopedFastFlag syntax{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+        ScopedFastFlag semantics{FFlag::LuauExplicitTypeInstantiationSupport, true};
 
         CheckResult result = check(R"(
-        local f: <A, T...>() -> (A, T...) = nil :: any
-        local correct: string, b: number, c: boolean = f<<string>>()
-        local incorrect: number, b: number, c: boolean = f<<string>>()
+            local f: <A, T...>() -> (A, T...) = nil :: any
+            local correct: string, b: number, c: boolean = f<<string>>()
+            local incorrect: number, b: number, c: boolean = f<<string>>()
         )");
 
         LUAU_REQUIRE_ERROR_COUNT(1, result);

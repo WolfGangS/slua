@@ -18,7 +18,8 @@ LUAU_FASTINT(LuauTypeLengthLimit)
 LUAU_FASTINT(LuauParseErrorLimit)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_DYNAMIC_FASTFLAG(DebugLuauReportReturnTypeVariadicWithTypeSuffix)
-LUAU_FASTFLAG(LuauExplicitTypeExpressionInstantiation)
+LUAU_FASTFLAG(LuauExplicitTypeInstantiationSyntax)
+LUAU_FASTFLAG(LuauCstStatDoWithStatsStart)
 
 // Clip with DebugLuauReportReturnTypeVariadicWithTypeSuffix
 extern bool luau_telemetry_parsed_return_type_variadic_with_type_suffix;
@@ -2847,7 +2848,7 @@ TEST_CASE_FIXTURE(Fixture, "for_loop_with_single_var_has_comma_positions_of_size
 
 TEST_CASE_FIXTURE(Fixture, "explicit_type_instantiation_expression_call")
 {
-    ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+    ScopedFastFlag sff{FFlag::LuauExplicitTypeInstantiationSyntax, true};
 
     std::string source = "local x = f<<T, U>>()";
 
@@ -2873,7 +2874,7 @@ TEST_CASE_FIXTURE(Fixture, "explicit_type_instantiation_expression_call")
 
 TEST_CASE_FIXTURE(Fixture, "explicit_type_instantiation_expression")
 {
-    ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+    ScopedFastFlag sff{FFlag::LuauExplicitTypeInstantiationSyntax, true};
 
     AstStat* stat = parse("local x = f<<T, U>>");
     REQUIRE(stat != nullptr);
@@ -2881,7 +2882,7 @@ TEST_CASE_FIXTURE(Fixture, "explicit_type_instantiation_expression")
 
 TEST_CASE_FIXTURE(Fixture, "explicit_type_instantiation_statement")
 {
-    ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+    ScopedFastFlag sff{FFlag::LuauExplicitTypeInstantiationSyntax, true};
 
     AstStat* stat = parse("f<<T, U>>()");
     REQUIRE(stat != nullptr);
@@ -2889,7 +2890,7 @@ TEST_CASE_FIXTURE(Fixture, "explicit_type_instantiation_statement")
 
 TEST_CASE_FIXTURE(Fixture, "explicit_type_instantiation_indexing")
 {
-    ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+    ScopedFastFlag sff{FFlag::LuauExplicitTypeInstantiationSyntax, true};
 
     AstStat* stat = parse(R"(
         t.f<<T, U>>()
@@ -2901,7 +2902,7 @@ TEST_CASE_FIXTURE(Fixture, "explicit_type_instantiation_indexing")
 
 TEST_CASE_FIXTURE(Fixture, "explicit_type_instantiation_empty_list")
 {
-    ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+    ScopedFastFlag sff{FFlag::LuauExplicitTypeInstantiationSyntax, true};
 
     AstStat* stat = parse(R"(
         f<<>>()
@@ -2923,6 +2924,38 @@ TEST_CASE_FIXTURE(Fixture, "basic_less_than_check_no_explicit_type_instantiaton"
         local a = b.c < d
     )");
     REQUIRE(stat != nullptr);
+}
+
+TEST_CASE_FIXTURE(Fixture, "do_end_block_with_cst")
+{
+    ScopedFastFlag sff{FFlag::LuauCstStatDoWithStatsStart, true};
+
+    ParseOptions parseOptions;
+    parseOptions.storeCstData = true;
+
+    ParseResult result = parseEx(
+        R"(
+        do
+            local hello = "world"
+        end
+    )",
+        parseOptions
+    );
+    REQUIRE(result.root);
+
+    const auto moduleCstNode = result.cstNodeMap.find(result.root);
+    // We only create CST nodes for do ... end blocks
+    REQUIRE(!moduleCstNode);
+
+    REQUIRE_EQ(result.root->body.size, 1);
+    auto doBlock = result.root->body.data[0]->as<AstStatBlock>();
+    REQUIRE(doBlock);
+    const auto doBlockCstNode = result.cstNodeMap.find(doBlock);
+    REQUIRE(doBlockCstNode);
+    const auto doBlockCst = (*doBlockCstNode)->as<CstStatDo>();
+    REQUIRE(doBlockCst);
+    CHECK_EQ(doBlockCst->statsStartPosition, Position{2, 12});
+    CHECK_EQ(doBlockCst->endPosition, Position{3, 8});
 }
 
 TEST_SUITE_END();
@@ -4539,6 +4572,34 @@ TEST_CASE_FIXTURE(Fixture, "parsing_incomplete_string_interpolation_missing_curl
     auto err = parseResult.errors[0];
     CHECK_EQ(err.getMessage(), "Malformed interpolated string; did you forget to add a '}'?");
     CHECK_EQ(err.getLocation(), Location({0, 17}, {0, 18}));
+}
+
+TEST_CASE_FIXTURE(Fixture, "parse_type_name")
+{
+    std::string code = "<A>(A, string, boolean?) -> number";
+    Allocator allocator;
+    AstNameTable names{allocator};
+
+    ParseNodeResult<AstType> result = Parser::parseType(code.data(), code.size(), names, allocator);
+
+    REQUIRE(result.errors.empty());
+    REQUIRE(result.root);
+
+    auto fun = result.root->as<AstTypeFunction>();
+    REQUIRE(fun);
+    REQUIRE(1 == fun->generics.size);
+    REQUIRE(3 == fun->argTypes.types.size);
+
+    auto returnPack = fun->returnTypes->as<AstTypePackExplicit>();
+    REQUIRE(returnPack);
+    REQUIRE(1 == returnPack->typeList.types.size);
+}
+
+TEST_CASE_FIXTURE(Fixture, "explicit_type_instantiation_errors")
+{
+    ScopedFastFlag sff{FFlag::LuauExplicitTypeInstantiationSyntax, true};
+
+    matchParseError("local a = x:a<<T>>", "Expected '(', '{' or <string> when parsing function call, got <eof>");
 }
 
 TEST_SUITE_END();

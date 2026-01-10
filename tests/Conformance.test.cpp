@@ -35,16 +35,15 @@ void luaC_validate(lua_State* L);
 void luau_callhook(lua_State* L, lua_Hook hook, void* userdata);
 
 LUAU_FASTFLAG(DebugLuauAbortingChecks)
-LUAU_FASTFLAG(LuauExplicitTypeExpressionInstantiation)
+LUAU_FASTFLAG(LuauExplicitTypeInstantiationSyntax)
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
-LUAU_FASTFLAG(LuauVectorLerp)
-LUAU_FASTFLAG(LuauCompileVectorLerp)
-LUAU_FASTFLAG(LuauTypeCheckerVectorLerp2)
-LUAU_FASTFLAG(LuauCodeGenVectorLerp2)
 LUAU_FASTFLAG(LuauStacklessPcall)
 LUAU_FASTFLAG(LuauMathIsNanInfFinite)
 LUAU_FASTFLAG(LuauCompileMathIsNanInfFinite)
 LUAU_FASTFLAG(LuauTypeCheckerMathIsNanInfFinite)
+LUAU_FASTFLAG(LuauCodegenChainedSpills)
+LUAU_FASTFLAG(LuauCodegenSpillRestoreFreeTemp)
+LUAU_FASTFLAG(LuauCodegenDwordSpillSlots)
 
 static lua_CompileOptions defaultOptions()
 {
@@ -289,7 +288,69 @@ static StateRef runConformance(
     Luau::CodeGen::CompilationOptions nativeOpts = codegenOptions ? *codegenOptions : defaultCodegenOptions();
 
     if (result == 0 && codegen && !skipCodegen && luau_codegen_supported())
-        Luau::CodeGen::compile(L, -1, nativeOpts);
+    {
+        Luau::CodeGen::CompilationResult result = Luau::CodeGen::compile(L, -1, nativeOpts);
+
+        CHECK(result.result == Luau::CodeGen::CodeGenCompilationResult::Success);
+
+        if (result.hasErrors())
+        {
+            for (const Luau::CodeGen::ProtoCompilationFailure& protoFailure : result.protoFailures)
+            {
+                switch (protoFailure.result)
+                {
+                case Luau::CodeGen::CodeGenCompilationResult::Success:
+                case Luau::CodeGen::CodeGenCompilationResult::NothingToCompile:
+                case Luau::CodeGen::CodeGenCompilationResult::NotNativeModule:
+                case Luau::CodeGen::CodeGenCompilationResult::CodeGenNotInitialized:
+                case Luau::CodeGen::CodeGenCompilationResult::CodeGenAssemblerFinalizationFailure:
+                case Luau::CodeGen::CodeGenCompilationResult::AllocationFailed:
+                    // These cases cannot be the Proto failure reason
+                    FAIL("Unexpected main code generation failure result");
+                    break;
+
+                case Luau::CodeGen::CodeGenCompilationResult::CodeGenOverflowInstructionLimit:
+                    MESSAGE(
+                        "Function '",
+                        protoFailure.debugname.empty() ? "(anonymous)" : protoFailure.debugname,
+                        "':",
+                        protoFailure.line,
+                        " exceeded total module instruction limit"
+                    );
+                    break;
+                case Luau::CodeGen::CodeGenCompilationResult::CodeGenOverflowBlockLimit:
+                    MESSAGE(
+                        "Function '",
+                        protoFailure.debugname.empty() ? "(anonymous)" : protoFailure.debugname,
+                        "':",
+                        protoFailure.line,
+                        " exceeded function code block limit"
+                    );
+                    break;
+                case Luau::CodeGen::CodeGenCompilationResult::CodeGenOverflowBlockInstructionLimit:
+                    MESSAGE(
+                        "Function '",
+                        protoFailure.debugname.empty() ? "(anonymous)" : protoFailure.debugname,
+                        "':",
+                        protoFailure.line,
+                        " exceeded single code block instruction limit"
+                    );
+                    break;
+                case Luau::CodeGen::CodeGenCompilationResult::CodeGenLoweringFailure:
+                    MESSAGE(
+                        "Function '",
+                        protoFailure.debugname.empty() ? "(anonymous)" : protoFailure.debugname,
+                        "':",
+                        protoFailure.line,
+                        " encountered an internal lowering failure"
+                    );
+                    break;
+                case Luau::CodeGen::CodeGenCompilationResult::Count:
+                    LUAU_ASSERT(false);
+                }
+            }
+        }
+    }
 
     // Extra test for lowering on both platforms with assembly generation
     if (luau_codegen_supported())
@@ -307,13 +368,22 @@ static StateRef runConformance(
         assemblyOptions.includeOutlinedCode = true;
         assemblyOptions.includeIrTypes = true;
 
+        Luau::CodeGen::LoweringStats stats;
+        stats.functionStatsFlags = Luau::CodeGen::FunctionStatsFlags::FunctionStats_Enable;
+
         assemblyOptions.target = Luau::CodeGen::AssemblyOptions::A64;
-        std::string a64 = Luau::CodeGen::getAssembly(L, -1, assemblyOptions);
+        std::string a64 = Luau::CodeGen::getAssembly(L, -1, assemblyOptions, &stats);
         CHECK(!a64.empty());
 
+        CHECK(stats.regAllocErrors == 0);
+        CHECK(stats.loweringErrors == 0);
+
         assemblyOptions.target = Luau::CodeGen::AssemblyOptions::X64_SystemV;
-        std::string x64 = Luau::CodeGen::getAssembly(L, -1, assemblyOptions);
+        std::string x64 = Luau::CodeGen::getAssembly(L, -1, assemblyOptions, &stats);
         CHECK(!x64.empty());
+
+        CHECK(stats.regAllocErrors == 0);
+        CHECK(stats.loweringErrors == 0);
     }
 
     int status = (result == 0) ? lua_resume(L, nullptr, 0) : LUA_ERRSYNTAX;
@@ -506,6 +576,74 @@ static int lua_vec2_namecall(lua_State* L)
     luaL_error(L, "%s is not a valid method of vector", luaL_checkstring(L, 1));
 }
 
+Vertex* lua_vertex_push(lua_State* L)
+{
+    Vertex* data = (Vertex*)lua_newuserdatatagged(L, sizeof(Vertex), kTagVertex);
+
+    lua_getuserdatametatable(L, kTagVertex);
+    lua_setmetatable(L, -2);
+
+    return data;
+}
+
+Vertex* lua_vertex_get(lua_State* L, int idx)
+{
+    Vertex* a = (Vertex*)lua_touserdatatagged(L, idx, kTagVertex);
+
+    if (a)
+        return a;
+
+    luaL_typeerror(L, idx, "vertex");
+}
+
+static int lua_vertex(lua_State* L)
+{
+    const float* pos = luaL_checkvector(L, 1);
+    const float* normal = luaL_checkvector(L, 2);
+    Vec2* uv = lua_vec2_get(L, 3);
+
+    Vertex* data = lua_vertex_push(L);
+
+    data->pos[0] = pos[0];
+    data->pos[1] = pos[1];
+    data->pos[2] = pos[2];
+    data->normal[0] = normal[0];
+    data->normal[1] = normal[1];
+    data->normal[2] = normal[2];
+    data->uv[0] = uv->x;
+    data->uv[1] = uv->y;
+
+    return 1;
+}
+
+static int lua_vertex_index(lua_State* L)
+{
+    Vertex* v = lua_vertex_get(L, 1);
+    const char* name = luaL_checkstring(L, 2);
+
+    if (strcmp(name, "pos") == 0)
+    {
+        lua_pushvector(L, v->pos[0], v->pos[1], v->pos[2]);
+        return 1;
+    }
+
+    if (strcmp(name, "normal") == 0)
+    {
+        lua_pushvector(L, v->normal[0], v->normal[1], v->normal[2]);
+        return 1;
+    }
+
+    if (strcmp(name, "uv") == 0)
+    {
+        Vec2* uv = lua_vec2_push(L);
+        uv->x = v->uv[0];
+        uv->y = v->uv[1];
+        return 1;
+    }
+
+    luaL_error(L, "%s is not a valid member of vertex", name);
+}
+
 void setupUserdataHelpers(lua_State* L)
 {
     // create metatable with all the metamethods
@@ -618,6 +756,22 @@ void setupUserdataHelpers(lua_State* L)
     // ctor
     lua_pushcfunction(L, lua_vec2, "vec2");
     lua_setglobal(L, "vec2");
+
+    lua_pop(L, 1);
+
+    // register vertex as well
+    luaL_newmetatable(L, "vertex");
+    lua_pushvalue(L, -1);
+    lua_setuserdatametatable(L, kTagVertex);
+
+    lua_pushcfunction(L, lua_vertex_index, nullptr);
+    lua_setfield(L, -2, "__index");
+
+    lua_setreadonly(L, -1, true);
+
+    // ctor
+    lua_pushcfunction(L, lua_vertex, "vertex");
+    lua_setglobal(L, "vertex");
 
     lua_pop(L, 1);
 }
@@ -1353,7 +1507,7 @@ TEST_CASE("Pack")
 
 TEST_CASE("ExplicitTypeInstantiations")
 {
-    ScopedFastFlag sff{FFlag::LuauExplicitTypeExpressionInstantiation, true};
+    ScopedFastFlag sff{FFlag::LuauExplicitTypeInstantiationSyntax, true};
     runConformance("explicit_type_instantiations.luau");
 }
 
@@ -1643,13 +1797,6 @@ TEST_CASE("Vector")
 
 TEST_CASE("VectorLibrary")
 {
-    ScopedFastFlag _[]{
-        {FFlag::LuauCompileVectorLerp, true},
-        {FFlag::LuauTypeCheckerVectorLerp2, true},
-        {FFlag::LuauVectorLerp, true},
-        {FFlag::LuauCodeGenVectorLerp2, true}
-    };
-
     lua_CompileOptions copts = defaultOptions();
 
     SUBCASE("O0")
@@ -3244,16 +3391,17 @@ TEST_CASE("Interrupt")
         }
     };
 
-    for (int test = 1; test <= 5; ++test)
+    for (int test = 1; test <= 6; ++test)
     {
         lua_State* T = lua_newthread(L);
 
-        std::string name = "strhang" + std::to_string(test);
+        std::string name = "hang" + std::to_string(test);
         lua_getglobal(T, name.c_str());
 
         index = 0;
         int status = lua_resume(T, nullptr, 0);
         CHECK(status == LUA_ERRRUN);
+        CHECK(strstr(luaL_checkstring(T, -1), "timeout") != nullptr);
 
         lua_pop(L, 1);
     }
@@ -3261,7 +3409,7 @@ TEST_CASE("Interrupt")
     {
         lua_State* T = lua_newthread(L);
 
-        lua_getglobal(T, "strhangpcall");
+        lua_getglobal(T, "hangpcall");
 
         index = 0;
         int status = lua_resume(T, nullptr, 0);
@@ -3920,6 +4068,8 @@ TEST_CASE("SafeEnv")
 
 TEST_CASE("Native")
 {
+    ScopedFastFlag luauCodegenSpillRestoreFreeTemp{FFlag::LuauCodegenSpillRestoreFreeTemp, true};
+
     // This tests requires code to run natively, otherwise all 'is_native' checks will fail
     if (!codegen || !luau_codegen_supported())
         return;
@@ -3974,6 +4124,29 @@ TEST_CASE("Native")
     );
 }
 
+TEST_CASE("NativeIntegerSpills")
+{
+    ScopedFastFlag luauCodegenChainedSpills{FFlag::LuauCodegenChainedSpills, true};
+    ScopedFastFlag luauCodegenDwordSpillSlots{FFlag::LuauCodegenDwordSpillSlots, true};
+
+    lua_CompileOptions copts = defaultOptions();
+
+    SUBCASE("O0")
+    {
+        copts.optimizationLevel = 0;
+    }
+    SUBCASE("O1")
+    {
+        copts.optimizationLevel = 1;
+    }
+    SUBCASE("O2")
+    {
+        copts.optimizationLevel = 2;
+    }
+
+    runConformance("native_integer_spills.luau", nullptr, nullptr, nullptr, &copts);
+}
+
 TEST_CASE("NativeTypeAnnotations")
 {
     // This tests requires code to run natively, otherwise all 'is_native' checks will fail
@@ -3995,7 +4168,7 @@ TEST_CASE("NativeUserdata")
     lua_CompileOptions copts = defaultOptions();
     Luau::CodeGen::CompilationOptions nativeOpts = defaultCodegenOptions();
 
-    static const char* kUserdataCompileTypes[] = {"vec2", "color", "mat3", nullptr};
+    static const char* kUserdataCompileTypes[] = {"vec2", "color", "mat3", "vertex", nullptr};
     copts.userdataTypes = kUserdataCompileTypes;
 
     SUBCASE("NoIrHooks")

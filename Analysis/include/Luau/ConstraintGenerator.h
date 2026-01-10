@@ -6,7 +6,6 @@
 #include "Luau/ConstraintSet.h"
 #include "Luau/ControlFlow.h"
 #include "Luau/DataFlowGraph.h"
-#include "Luau/EqSatSimplification.h"
 #include "Luau/HashUtil.h"
 #include "Luau/InsertionOrderedMap.h"
 #include "Luau/Module.h"
@@ -57,6 +56,11 @@ struct InferencePack
         , refinements(refinements)
     {
     }
+};
+
+struct Checkpoint
+{
+    size_t offset = 0;
 };
 
 struct ConstraintGenerator
@@ -113,8 +117,6 @@ struct ConstraintGenerator
     // Needed to be able to enable error-suppression preservation for immediate refinements.
     NotNull<Normalizer> normalizer;
 
-    NotNull<Simplifier> simplifier;
-
     // Needed to register all available type functions for execution at later stages.
     NotNull<TypeFunctionRuntime> typeFunctionRuntime;
     DenseHashMap<const AstStatTypeFunction*, ScopePtr> astTypeFunctionEnvironmentScopes{nullptr};
@@ -141,7 +143,6 @@ struct ConstraintGenerator
     ConstraintGenerator(
         ModulePtr module,
         NotNull<Normalizer> normalizer,
-        NotNull<Simplifier> simplifier,
         NotNull<TypeFunctionRuntime> typeFunctionRuntime,
         NotNull<ModuleResolver> moduleResolver,
         NotNull<BuiltinTypes> builtinTypes,
@@ -176,6 +177,8 @@ private:
     std::vector<InteriorFreeTypes> interiorFreeTypes;
 
     std::vector<TypeId> unionsToSimplify;
+
+    Polarity polarity = Polarity::None;
 
     DenseHashMap<std::pair<TypeId, std::string>, TypeId, PairHash<TypeId, std::string>> propIndexPairsSeen{{nullptr, ""}};
 
@@ -294,6 +297,13 @@ private:
     );
 
     InferencePack checkPack(const ScopePtr& scope, AstExprCall* call);
+    InferencePack checkExprCall(
+        const ScopePtr& scope,
+        AstExprCall* call,
+        TypeId fnType,
+        Checkpoint funcBeginCheckpoint,
+        Checkpoint funcEndCheckpoint
+    );
 
     /**
      * Checks an expression that is expected to evaluate to one type.
@@ -381,6 +391,7 @@ private:
     TypeId resolveTableType(const ScopePtr& scope, AstType* ty, AstTypeTable* tab, bool inTypeArguments, bool replaceErrorWithFresh);
     TypeId resolveFunctionType(const ScopePtr& scope, AstType* ty, AstTypeFunction* fn, bool inTypeArguments, bool replaceErrorWithFresh);
 
+public:
     /**
      * Resolves a type from its AST annotation.
      * @param scope the scope that the type annotation appears within.
@@ -388,8 +399,15 @@ private:
      * @param inTypeArguments whether we are resolving a type that's contained within type arguments, `<...>`.
      * @return the type of the AST annotation.
      **/
-    TypeId resolveType(const ScopePtr& scope, AstType* ty, bool inTypeArguments, bool replaceErrorWithFresh = false);
+    TypeId resolveType(
+        const ScopePtr& scope,
+        AstType* ty,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh = false,
+        Polarity initialPolarity = Polarity::Positive
+    );
 
+private:
     // resolveType() is recursive, but we only want to invoke
     // inferGenericPolarities() once at the very end.  We thus isolate the
     // recursive part of the algorithm to this internal helper.
@@ -402,9 +420,15 @@ private:
      * @param inTypeArguments whether we are resolving a type that's contained within type arguments, `<...>`.
      * @return the type pack of the AST annotation.
      **/
-    TypePackId resolveTypePack(const ScopePtr& scope, AstTypePack* tp, bool inTypeArguments, bool replaceErrorWithFresh = false);
+    TypePackId resolveTypePack(
+        const ScopePtr& scope,
+        AstTypePack* tp,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh = false,
+        Polarity initialPolarity = Polarity::Positive
+    );
 
-    // Inner hepler for resolveTypePack
+    // Inner helper for resolveTypePack
     TypePackId resolveTypePack_(const ScopePtr& scope, AstTypePack* tp, bool inTypeArguments, bool replaceErrorWithFresh = false);
 
     /**
@@ -414,7 +438,13 @@ private:
      * @param inTypeArguments whether we are resolving a type that's contained within type arguments, `<...>`.
      * @return the type pack of the AST annotation.
      **/
-    TypePackId resolveTypePack(const ScopePtr& scope, const AstTypeList& list, bool inTypeArguments, bool replaceErrorWithFresh = false);
+    TypePackId resolveTypePack(
+        const ScopePtr& scope,
+        const AstTypeList& list,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh = false,
+        Polarity initialPolarity = Polarity::Positive
+    );
 
     /**
      * Creates generic types given a list of AST definitions, resolving default

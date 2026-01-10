@@ -6,8 +6,6 @@
 
 #include <type_traits>
 
-LUAU_FASTFLAG(LuauSubtypingReportGenericBoundMismatches2);
-
 namespace Luau
 {
 
@@ -211,8 +209,8 @@ static void errorToString(std::ostream& stream, const T& err)
         for (auto [s, t] : err.recommendedArgs)
             recArgs += " " + s + ": " + toString(t);
         recArgs += " ]";
-        stream << "ExplicitFunctionAnnotationRecommended { recommmendedReturn = '" + toString(err.recommendedReturn) +
-                      "', recommmendedArgs = " + recArgs + "}";
+        stream << "ExplicitFunctionAnnotationRecommended { recommendedReturn = '" + toString(err.recommendedReturn) +
+                      "', recommendedArgs = " + recArgs + "}";
     }
     else if constexpr (std::is_same_v<T, UninhabitedTypePackFunction>)
         stream << "UninhabitedTypePackFunction { " << toString(err.tp) << " }";
@@ -276,7 +274,6 @@ static void errorToString(std::ostream& stream, const T& err)
         stream << "RecursiveRestraintViolation";
     else if constexpr (std::is_same_v<T, GenericBoundsMismatch>)
     {
-        LUAU_ASSERT(FFlag::LuauSubtypingReportGenericBoundMismatches2);
         stream << "GenericBoundsMismatch { genericName = " << std::string{err.genericName} << ", lowerBounds = [";
         for (size_t i = 0; i < err.lowerBounds.size(); ++i)
         {
@@ -302,6 +299,8 @@ static void errorToString(std::ostream& stream, const T& err)
                << ", maximumTypePacks = " << err.maximumTypePacks << " }";
     else if constexpr (std::is_same_v<T, UnappliedTypeFunction>)
         stream << "UnappliedTypeFunction {}";
+    else if constexpr (std::is_same_v<T, AmbiguousFunctionCall>)
+        stream << "AmbiguousFunctionCall { " << toString(err.function) << ", " << toString(err.arguments) << " }";
     else
         static_assert(always_false_v<T>, "Non-exhaustive type switch");
 }

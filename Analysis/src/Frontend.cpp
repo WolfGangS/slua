@@ -9,7 +9,6 @@
 #include "Luau/ConstraintSolver.h"
 #include "Luau/DataFlowGraph.h"
 #include "Luau/DcrLogger.h"
-#include "Luau/EqSatSimplification.h"
 #include "Luau/ExpectedTypeVisitor.h"
 #include "Luau/FileResolver.h"
 #include "Luau/NonStrictTypeChecker.h"
@@ -42,9 +41,8 @@ LUAU_FASTFLAGVARIABLE(DebugLuauForbidInternalTypes)
 LUAU_FASTFLAGVARIABLE(DebugLuauForceStrictMode)
 LUAU_FASTFLAGVARIABLE(DebugLuauForceNonStrictMode)
 LUAU_FASTFLAGVARIABLE(LuauUseWorkspacePropToChooseSolver)
-LUAU_FASTFLAGVARIABLE(LuauPassTypeCheckLimitsEarly)
 LUAU_FASTFLAGVARIABLE(DebugLuauAlwaysShowConstraintSolvingIncomplete)
-LUAU_FASTFLAG(LuauEmplaceNotPushBack)
+LUAU_FASTFLAG(LuauStandaloneParseType)
 
 namespace Luau
 {
@@ -397,12 +395,9 @@ std::vector<RequireCycle> getRequireCycles(
 
         if (!cycle.empty())
         {
-            if (FFlag::LuauEmplaceNotPushBack)
-                result.emplace_back(RequireCycle{depLocation, std::move(cycle)});
-            else
-                result.push_back({depLocation, std::move(cycle)});
-
-            // note: if we didn't find a cycle, all nodes that we've seen don't depend [transitively] on start
+            result.emplace_back(
+                RequireCycle{depLocation, std::move(cycle)}
+            ); // note: if we didn't find a cycle, all nodes that we've seen don't depend [transitively] on start
             // so it's safe to *only* clear seen vector when we find a cycle
             // if we don't do it, we will not have correct reporting for some cycles
             seen.clear();
@@ -1011,52 +1006,22 @@ void Frontend::checkBuildQueueItem(BuildQueueItem& item)
     double timestamp = getTimestamp();
     const std::vector<RequireCycle>& requireCycles = item.requireCycles;
 
-    TypeCheckLimits typeCheckLimits;
+    TypeCheckLimits typeCheckLimits = makeTypeCheckLimits(item.options);
 
-    if (FFlag::LuauPassTypeCheckLimitsEarly)
+    // TODO: This is a dirty ad hoc solution for autocomplete timeouts
+    // We are trying to dynamically adjust our existing limits to lower total typechecking time under the limit
+    // so that we'll have type information for the whole file at lower quality instead of a full abort in the middle
+    if (item.options.applyInternalLimitScaling)
     {
-        typeCheckLimits = makeTypeCheckLimits(item.options);
-
-        // TODO: This is a dirty ad hoc solution for autocomplete timeouts
-        // We are trying to dynamically adjust our existing limits to lower total typechecking time under the limit
-        // so that we'll have type information for the whole file at lower quality instead of a full abort in the middle
-        if (item.options.applyInternalLimitScaling)
-        {
-            if (FInt::LuauTarjanChildLimit > 0)
-                typeCheckLimits.instantiationChildLimit = std::max(1, int(FInt::LuauTarjanChildLimit * sourceNode.autocompleteLimitsMult));
-            else
-                typeCheckLimits.instantiationChildLimit = std::nullopt;
-
-            if (FInt::LuauTypeInferIterationLimit > 0)
-                typeCheckLimits.unifierIterationLimit = std::max(1, int(FInt::LuauTypeInferIterationLimit * sourceNode.autocompleteLimitsMult));
-            else
-                typeCheckLimits.unifierIterationLimit = std::nullopt;
-        }
-    }
-    else
-    {
-        if (item.options.moduleTimeLimitSec)
-            typeCheckLimits.finishTime = TimeTrace::getClock() + *item.options.moduleTimeLimitSec;
+        if (FInt::LuauTarjanChildLimit > 0)
+            typeCheckLimits.instantiationChildLimit = std::max(1, int(FInt::LuauTarjanChildLimit * sourceNode.autocompleteLimitsMult));
         else
-            typeCheckLimits.finishTime = std::nullopt;
+            typeCheckLimits.instantiationChildLimit = std::nullopt;
 
-        // TODO: This is a dirty ad hoc solution for autocomplete timeouts
-        // We are trying to dynamically adjust our existing limits to lower total typechecking time under the limit
-        // so that we'll have type information for the whole file at lower quality instead of a full abort in the middle
-        if (item.options.applyInternalLimitScaling)
-        {
-            if (FInt::LuauTarjanChildLimit > 0)
-                typeCheckLimits.instantiationChildLimit = std::max(1, int(FInt::LuauTarjanChildLimit * sourceNode.autocompleteLimitsMult));
-            else
-                typeCheckLimits.instantiationChildLimit = std::nullopt;
-
-            if (FInt::LuauTypeInferIterationLimit > 0)
-                typeCheckLimits.unifierIterationLimit = std::max(1, int(FInt::LuauTypeInferIterationLimit * sourceNode.autocompleteLimitsMult));
-            else
-                typeCheckLimits.unifierIterationLimit = std::nullopt;
-        }
-
-        typeCheckLimits.cancellationToken = item.options.cancellationToken;
+        if (FInt::LuauTypeInferIterationLimit > 0)
+            typeCheckLimits.unifierIterationLimit = std::max(1, int(FInt::LuauTypeInferIterationLimit * sourceNode.autocompleteLimitsMult));
+        else
+            typeCheckLimits.unifierIterationLimit = std::nullopt;
     }
 
     if (item.options.forAutocomplete)
@@ -1185,11 +1150,7 @@ void Frontend::checkBuildQueueItem(BuildQueueItem& item)
     ErrorVec parseErrors;
 
     for (const ParseError& pe : sourceModule.parseErrors)
-        if (FFlag::LuauEmplaceNotPushBack)
-            parseErrors.emplace_back(pe.getLocation(), item.name, SyntaxError{pe.what()});
-        else
-            parseErrors.push_back(TypeError{pe.getLocation(), item.name, SyntaxError{pe.what()}});
-
+        parseErrors.emplace_back(pe.getLocation(), item.name, SyntaxError{pe.what()});
     module->errors.insert(module->errors.begin(), parseErrors.begin(), parseErrors.end());
 
     item.module = module;
@@ -1531,7 +1492,6 @@ ModulePtr check(
     unifierState.counters.iterationLimit = limits.unifierIterationLimit.value_or(FInt::LuauTypeInferIterationLimit);
 
     Normalizer normalizer{&module->internalTypes, builtinTypes, NotNull{&unifierState}, SolverMode::New};
-    SimplifierPtr simplifier = newSimplifier(NotNull{&module->internalTypes}, builtinTypes);
     TypeFunctionRuntime typeFunctionRuntime{iceHandler, NotNull{&limits}};
 
     typeFunctionRuntime.allowEvaluation = true;
@@ -1539,7 +1499,6 @@ ModulePtr check(
     ConstraintGenerator cg{
         module,
         NotNull{&normalizer},
-        NotNull{simplifier.get()},
         NotNull{&typeFunctionRuntime},
         moduleResolver,
         builtinTypes,
@@ -1558,7 +1517,6 @@ ModulePtr check(
 
     ConstraintSolver cs{
         NotNull{&normalizer},
-        NotNull{simplifier.get()},
         NotNull{&typeFunctionRuntime},
         module,
         moduleResolver,
@@ -1625,7 +1583,6 @@ ModulePtr check(
             case Mode::Nonstrict:
                 Luau::checkNonStrict(
                     builtinTypes,
-                    NotNull{simplifier.get()},
                     NotNull{&typeFunctionRuntime},
                     iceHandler,
                     NotNull{&unifierState},
@@ -1640,7 +1597,6 @@ ModulePtr check(
             case Mode::Strict:
                 Luau::check(
                     builtinTypes,
-                    NotNull{simplifier.get()},
                     NotNull{&typeFunctionRuntime},
                     NotNull{&unifierState},
                     NotNull{&limits},
@@ -2081,6 +2037,63 @@ void Frontend::clearBuiltinEnvironments()
 {
     environments.clear();
     builtinDefinitions.clear();
+}
+
+TypeId Frontend::parseType(
+    NotNull<Allocator> allocator,
+    NotNull<AstNameTable> nameTable,
+    NotNull<InternalErrorReporter> iceHandler,
+    TypeCheckLimits limits,
+    NotNull<TypeArena> arena,
+    std::string_view source
+)
+{
+    ParseNodeResult<AstType> parseResult = Parser::parseType(source.data(), source.size(), *nameTable, *allocator);
+
+    if (!parseResult.root)
+        iceHandler->ice("Frontend::parseType was given an unparseable type");
+
+    if (!parseResult.errors.empty())
+        iceHandler->ice("Frontend::parseType error: " + parseResult.errors.front().getMessage());
+
+    ModulePtr module = std::make_shared<Module>();
+
+    UnifierSharedState unifierState{iceHandler};
+    unifierState.counters.recursionLimit = FInt::LuauTypeInferRecursionLimit;
+    unifierState.counters.iterationLimit = limits.unifierIterationLimit.value_or(FInt::LuauTypeInferIterationLimit);
+
+    Normalizer normalizer{arena, builtinTypes, NotNull{&unifierState}, SolverMode::New};
+
+    TypeFunctionRuntime typeFunctionRuntime{iceHandler, NotNull{&limits}};
+    typeFunctionRuntime.allowEvaluation = true;
+
+    NullModuleResolver moduleResolver;
+
+    DataFlowGraph dfg = DataFlowGraphBuilder::empty(NotNull{&module->defArena}, NotNull{&module->keyArena});
+
+    ConstraintGenerator cg{
+        module,
+        NotNull{&normalizer},
+        NotNull{&typeFunctionRuntime},
+        NotNull{&moduleResolver},
+        builtinTypes,
+        iceHandler,
+        globals.globalScope,
+        globals.globalScope,
+        nullptr,
+        nullptr,
+        NotNull{&dfg},
+        {}
+    };
+
+    TypeId t = cg.resolveType(globals.globalScope, parseResult.root, false);
+
+    if (!cg.constraints.empty())
+    {
+        iceHandler->ice("Not yet implemented: parseType cannot reduce other type aliases");
+    }
+
+    return t;
 }
 
 } // namespace Luau

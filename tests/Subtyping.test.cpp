@@ -17,8 +17,6 @@
 #include <initializer_list>
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauPassBindableGenericsByReference)
-LUAU_FASTFLAG(LuauConsiderErrorSuppressionInTypes)
 
 using namespace Luau;
 
@@ -68,13 +66,11 @@ struct SubtypeFixture : Fixture
     TypeArena arena;
     InternalErrorReporter iceReporter;
     UnifierSharedState sharedState{&ice};
-    SimplifierPtr simplifier = newSimplifier(NotNull{&arena}, getBuiltins());
     Normalizer normalizer{&arena, getBuiltins(), NotNull{&sharedState}, FFlag::LuauSolverV2 ? SolverMode::New : SolverMode::Old};
     TypeCheckLimits limits;
     TypeFunctionRuntime typeFunctionRuntime{NotNull{&iceReporter}, NotNull{&limits}};
 
     ScopedFastFlag sff{FFlag::LuauSolverV2, true};
-    ScopedFastFlag sff1{FFlag::LuauPassBindableGenericsByReference, true};
 
     ScopePtr rootScope{new Scope(getBuiltins()->emptyTypePack)};
     ScopePtr moduleScope{new Scope(rootScope)};
@@ -84,9 +80,7 @@ struct SubtypeFixture : Fixture
 
     Subtyping mkSubtyping()
     {
-        return Subtyping{
-            getBuiltins(), NotNull{&arena}, NotNull{simplifier.get()}, NotNull{&normalizer}, NotNull{&typeFunctionRuntime}, NotNull{&iceReporter}
-        };
+        return Subtyping{getBuiltins(), NotNull{&arena}, NotNull{&normalizer}, NotNull{&typeFunctionRuntime}, NotNull{&iceReporter}};
     }
 
     TypePackId pack(std::initializer_list<TypeId> tys)
@@ -1445,7 +1439,6 @@ TEST_CASE_FIXTURE(SubtypeFixture, "(number, number...) <!: (number, string...)")
 
 TEST_CASE_FIXTURE(SubtypeFixture, "subtyping_reasonings_check_for_error_suppression_in_union_type_path")
 {
-    ScopedFastFlag sff{FFlag::LuauConsiderErrorSuppressionInTypes, true};
     TypeId subTy = arena.addType(UnionType{{getBuiltins()->numberType, getBuiltins()->errorType}});
     TypeId superTy = getBuiltins()->booleanType;
     SubtypingResult result = isSubtype(subTy, superTy);
@@ -1469,8 +1462,6 @@ TEST_CASE_FIXTURE(SubtypeFixture, "subtyping_reasonings_check_for_error_suppress
 
 TEST_CASE_FIXTURE(SubtypeFixture, "subtyping_reasonings_check_for_error_suppression_in_intersect_type_path")
 {
-    ScopedFastFlag sff{FFlag::LuauConsiderErrorSuppressionInTypes, true};
-
     TypeId subTy = getBuiltins()->booleanType;
     TypeId superTy = arena.addType(IntersectionType{{getBuiltins()->numberType, getBuiltins()->errorType}});
     SubtypingResult result = isSubtype(subTy, superTy);
@@ -1776,9 +1767,9 @@ TEST_CASE_FIXTURE(SubtypeFixture, "substitute_a_generic_for_a_negation")
     // <A, B>(x: A, y: B) -> (A & ~(false?)) | B
     // (~(false?), ~(false?)) -> (~(false?) & ~(false?)) | ~(false?)
 
-    TypeId aTy = arena.addType(GenericType{"A"});
+    TypeId aTy = arena.addType(GenericType{"A", Polarity::Mixed});
     getMutable<GenericType>(aTy)->scope = moduleScope.get();
-    TypeId bTy = arena.addType(GenericType{"B"});
+    TypeId bTy = arena.addType(GenericType{"B", Polarity::Mixed});
     getMutable<GenericType>(bTy)->scope = moduleScope.get();
 
     TypeId genericFunctionTy = arena.addType(
@@ -1826,7 +1817,7 @@ TEST_CASE_FIXTURE(SubtypeFixture, "weird_cyclic_instantiation")
     TypeArena arena;
     Scope scope(getBuiltins()->anyTypePack);
 
-    TypeId genericT = arena.addType(GenericType{"T"});
+    TypeId genericT = arena.addType(GenericType{"T", Polarity::Mixed});
 
     TypeId idTy = arena.addType(
         FunctionType{/* generics */ {genericT},

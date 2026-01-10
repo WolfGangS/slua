@@ -21,8 +21,7 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 LUAU_FASTFLAG(LuauTraceTypesInNonstrictMode2)
 LUAU_FASTFLAG(LuauSetMetatableDoesNotTimeTravel)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
-LUAU_FASTFLAG(LuauDoNotSuggestGenericsInAnonFuncs)
-LUAU_FASTFLAG(LuauAutocompleteAttributes)
+LUAU_FASTFLAG(LuauAutocompleteSingletonsInIndexer)
 
 using namespace Luau;
 
@@ -4375,8 +4374,6 @@ foo(@1)
 
 TEST_CASE_FIXTURE(ACFixture, "anonymous_autofilled_generic_type_pack_vararg")
 {
-    ScopedFastFlag sff{FFlag::LuauDoNotSuggestGenericsInAnonFuncs, true};
-
     check(R"(
 local function foo<A>(a: (...A) -> number, ...: A)
 	return a(...)
@@ -4398,8 +4395,6 @@ foo(@1)
 
 TEST_CASE_FIXTURE(ACFixture, "anonymous_autofilled_generic_named_arg")
 {
-    ScopedFastFlag sff{FFlag::LuauDoNotSuggestGenericsInAnonFuncs, true};
-
     check(R"(
 local function foo<A>(f: (a: A) -> number, a: A)
 	return f(a)
@@ -4421,8 +4416,6 @@ foo(@1)
 
 TEST_CASE_FIXTURE(ACFixture, "anonymous_autofilled_generic_return_type")
 {
-    ScopedFastFlag sff{FFlag::LuauDoNotSuggestGenericsInAnonFuncs, true};
-
     check(R"(
 local function foo<A>(f: () -> A)
 	return f()
@@ -4957,8 +4950,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_method_in_unfinished_while_body")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_attribute")
 {
-    ScopedFastFlag sff[]{{FFlag::LuauAutocompleteAttributes, true}};
-
     check(R"(
         \@@1
         function foo() return 42 end
@@ -4972,8 +4963,6 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_attribute")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_deprecated_attribute")
 {
-    ScopedFastFlag sff[]{{FFlag::LuauAutocompleteAttributes, true}};
-
     check(R"(
         \@dep@1
         function foo() return 42 end
@@ -4987,8 +4976,6 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_deprecated_attribute")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_braced_attribute")
 {
-    ScopedFastFlag sff[]{{FFlag::LuauAutocompleteAttributes, true}};
-
     check(R"(
         \@[@1]
         function foo() return 42 end
@@ -5002,8 +4989,6 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_braced_attribute")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_deprecated_braced_attribute")
 {
-    ScopedFastFlag sff[]{{FFlag::LuauAutocompleteAttributes, true}};
-
     check(R"(
         \@[dep@1]
         function foo() return 42 end
@@ -5013,6 +4998,22 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_deprecated_braced_attribute")
     CHECK_EQ(ac.entryMap.count("deprecated"), 1);
     CHECK_EQ(ac.entryMap.count("checked"), 1);
     CHECK_EQ(ac.entryMap.count("native"), 1);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_using_indexer_with_singleton_keys")
+{
+    ScopedFastFlag _{FFlag::LuauAutocompleteSingletonsInIndexer, true};
+
+    check(R"(
+        type List = "Val1" | "Val2" | "Val3"
+        local Table: { [List]: boolean }
+        local _ = Table.@1
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("Val1"), 1);
+    CHECK_EQ(ac.entryMap.count("Val2"), 1);
+    CHECK_EQ(ac.entryMap.count("Val3"), 1);
 }
 
 TEST_SUITE_END();

@@ -133,7 +133,7 @@ std::vector<std::unique_ptr<RequireNode>> TestRequireNode::getChildren() const
 
 std::vector<RequireAlias> TestRequireNode::getAvailableAliases() const
 {
-    return {{"defaultalias"}};
+    return {RequireAlias("defaultalias")};
 }
 
 std::unique_ptr<RequireNode> TestRequireSuggester::getNode(const ModuleName& name) const
@@ -559,16 +559,16 @@ TypeId Fixture::requireExportedType(const ModuleName& moduleName, const std::str
     return it->second.type;
 }
 
-std::string Fixture::canonicalize(TypeId ty)
+TypeId Fixture::parseType(std::string_view src)
 {
-    if (!simplifier)
-        simplifier = newSimplifier(NotNull{&simplifierArena}, getBuiltins());
-
-    auto res = eqSatSimplify(NotNull{simplifier.get()}, ty);
-    if (res)
-        return toString(res->result);
-    else
-        return toString(ty);
+    return getFrontend().parseType(
+        NotNull{&allocator},
+        NotNull{&nameTable},
+        NotNull{&getFrontend().iceHandler},
+        TypeCheckLimits{},
+        NotNull{&arena},
+        src
+    );
 }
 
 std::string Fixture::decorateWithTypes(const std::string& code)
@@ -903,10 +903,10 @@ void registerHiddenTypes(Frontend& frontend)
 
     unfreeze(globals.globalTypes);
 
-    TypeId t = globals.globalTypes.addType(GenericType{"T"});
+    TypeId t = globals.globalTypes.addType(GenericType{"T", Polarity::Mixed});
     GenericTypeDefinition genericT{t};
 
-    TypeId u = globals.globalTypes.addType(GenericType{"U"});
+    TypeId u = globals.globalTypes.addType(GenericType{"U", Polarity::Mixed});
     GenericTypeDefinition genericU{u};
 
     ScopePtr globalScope = globals.globalScope;

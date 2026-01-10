@@ -19,9 +19,7 @@
 LUAU_FASTINTVARIABLE(LuauIndentTypeMismatchMaxTypeLength, 10)
 
 LUAU_FASTFLAGVARIABLE(LuauNewNonStrictReportsOneIndexedErrors)
-LUAU_FASTFLAG(LuauSubtypingReportGenericBoundMismatches2)
-LUAU_FASTFLAG(LuauUnknownGlobalFixSuggestion)
-LUAU_FASTFLAGVARIABLE(LuauNewNonStrictBetterCheckedFunctionErrorMessage)
+LUAU_FASTFLAGVARIABLE(LuauBetterTypeMismatchErrors)
 
 static std::string wrongNumberOfArgsString(
     size_t expectedCount,
@@ -118,9 +116,32 @@ struct ErrorConverter
             std::string given = givenModule ? quote(givenType) + " from " + quote(*givenModule) : quote(givenType);
             std::string wanted = wantedModule ? quote(wantedType) + " from " + quote(*wantedModule) : quote(wantedType);
             size_t luauIndentTypeMismatchMaxTypeLength = size_t(FInt::LuauIndentTypeMismatchMaxTypeLength);
-            if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
-                return "Type " + given + " could not be converted into " + wanted;
-            return "Type\n\t" + given + "\ncould not be converted into\n\t" + wanted;
+            if (FFlag::LuauBetterTypeMismatchErrors)
+            {
+                if (get<NeverType>(follow(tm.wantedType)))
+                {
+                    if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength)
+                        return "Expected this to be unreachable, but got " + given;
+                    return "Expected this to be unreachable, but got\n\t" + given;
+                }
+
+                if (tm.context == TypeMismatch::InvariantContext)
+                {
+                    if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
+                        return "Expected this to be exactly " + wanted + ", but got " + given;
+                    return "Expected this to be exactly\n\t" + wanted + "\nbut got\n\t" + given;
+                }
+
+                if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
+                    return "Expected this to be " + wanted + ", but got " + given;
+                return "Expected this to be\n\t" + wanted + "\nbut got\n\t" + given;
+            }
+            else
+            {
+                if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
+                    return "Type " + given + " could not be converted into " + wanted;
+                return "Type\n\t" + given + "\ncould not be converted into\n\t" + wanted;
+            }
         };
 
         if (givenTypeName == wantedTypeName)
@@ -160,7 +181,7 @@ struct ErrorConverter
         {
             result += "; " + tm.reason;
         }
-        else if (tm.context == TypeMismatch::InvariantContext)
+        else if (!FFlag::LuauBetterTypeMismatchErrors && tm.context == TypeMismatch::InvariantContext)
         {
             result += " in an invariant context";
         }
@@ -173,8 +194,7 @@ struct ErrorConverter
         switch (e.context)
         {
         case UnknownSymbol::Binding:
-            return FFlag::LuauUnknownGlobalFixSuggestion ? "Unknown global '" + e.name + "'; consider assigning to it first"
-                                                         : "Unknown global '" + e.name + "'";
+            return "Unknown global '" + e.name + "'; consider assigning to it first";
         case UnknownSymbol::Type:
             return "Unknown type '" + e.name + "'";
         }
@@ -236,7 +256,6 @@ struct ErrorConverter
     std::string operator()(const Luau::CountMismatch& e) const
     {
         const std::string expectedS = e.expected == 1 ? "" : "s";
-        const std::string actualS = e.actual == 1 ? "" : "s";
         const std::string actualVerb = e.actual == 1 ? "is" : "are";
 
         switch (e.context)
@@ -598,7 +617,9 @@ struct ErrorConverter
 
     std::string operator()(const TypePackMismatch& e) const
     {
-        std::string ss = "Type pack '" + toString(e.givenTp) + "' could not be converted into '" + toString(e.wantedTp) + "'";
+        std::string ss = FFlag::LuauBetterTypeMismatchErrors
+                             ? "Expected this to be '" + toString(e.wantedTp) + "', but got '" + toString(e.givenTp) + "'"
+                             : "Type pack '" + toString(e.givenTp) + "' could not be converted into '" + toString(e.wantedTp) + "'";
 
         if (!e.reason.empty())
             ss += "; " + e.reason;
@@ -759,38 +780,14 @@ struct ErrorConverter
 
     std::string operator()(const CheckedFunctionCallError& e) const
     {
-        if (FFlag::LuauNewNonStrictBetterCheckedFunctionErrorMessage)
-        {
-            return "the function '" + e.checkedFunctionName + "' expects to get a " + toString(e.expected) + " as its " +
-                   toHumanReadableIndex(e.argumentIndex) + " argument, but is being given a " + toString(e.passed) + "";
-        }
-        else
-        {
-            // TODO: What happens if checkedFunctionName cannot be found??
-            return "Function '" + e.checkedFunctionName + "' expects '" + toString(e.expected) + "' at argument #" +
-                   std::to_string(e.argumentIndex + 1) + ", but got '" + Luau::toString(e.passed) + "'";
-        }
+        return "the function '" + e.checkedFunctionName + "' expects to get a " + toString(e.expected) + " as its " +
+            toHumanReadableIndex(e.argumentIndex) + " argument, but is being given a " + toString(e.passed) + "";
     }
 
     std::string operator()(const NonStrictFunctionDefinitionError& e) const
     {
-        if (FFlag::LuauNewNonStrictBetterCheckedFunctionErrorMessage)
-        {
-            std::string prefix = e.functionName.empty() ? "" : "in the function '" + e.functionName + "', '";
-            return prefix + "the argument '" + e.argument + "' is used in a way that will error at runtime";
-        }
-        else
-        {
-            if (e.functionName.empty())
-            {
-                return "Argument " + e.argument + " with type '" + toString(e.argumentType) + "' is used in a way that will run time error";
-            }
-            else
-            {
-                return "Argument " + e.argument + " with type '" + toString(e.argumentType) + "' in function '" + e.functionName +
-                       "' is used in a way that will run time error";
-            }
-        }
+        std::string prefix = e.functionName.empty() ? "" : "in the function '" + e.functionName + "', '";
+        return prefix + "the argument '" + e.argument + "' is used in a way that will error at runtime";
     }
 
     std::string operator()(const PropertyAccessViolation& e) const
@@ -811,16 +808,8 @@ struct ErrorConverter
     std::string operator()(const CheckedFunctionIncorrectArgs& e) const
     {
 
-        if (FFlag::LuauNewNonStrictBetterCheckedFunctionErrorMessage)
-        {
-            return "the function '" + e.functionName + "' will error at runtime if it is not called with " + std::to_string(e.expected) +
-                   " arguments, but we are calling it here with " + std::to_string(e.actual) + " arguments";
-        }
-        else
-        {
-            return "Checked Function " + e.functionName + " expects " + std::to_string(e.expected) + " arguments, but received " +
-                   std::to_string(e.actual);
-        }
+        return "the function '" + e.functionName + "' will error at runtime if it is not called with " + std::to_string(e.expected) +
+            " arguments, but we are calling it here with " + std::to_string(e.actual) + " arguments";
     }
 
     std::string operator()(const UnexpectedTypeInSubtyping& e) const
@@ -898,7 +887,6 @@ struct ErrorConverter
 
     std::string operator()(const GenericBoundsMismatch& e) const
     {
-        LUAU_ASSERT(FFlag::LuauSubtypingReportGenericBoundMismatches2);
         std::string lowerBounds;
         for (size_t i = 0; i < e.lowerBounds.size(); ++i)
         {
@@ -1000,6 +988,11 @@ struct ErrorConverter
     std::string operator()(const UnappliedTypeFunction&) const
     {
         return "Type functions always require `<>` when referenced.";
+    }
+
+    std::string operator()(const AmbiguousFunctionCall& afc) const
+    {
+        return "Calling function " + toString(afc.function) + " with argument pack " + toString(afc.arguments) + " is ambiguous.";
     }
 };
 
@@ -1425,12 +1418,10 @@ GenericBoundsMismatch::GenericBoundsMismatch(const std::string_view genericName,
     , lowerBounds(lowerBoundSet.take())
     , upperBounds(upperBoundSet.take())
 {
-    LUAU_ASSERT(FFlag::LuauSubtypingReportGenericBoundMismatches2);
 }
 
 bool GenericBoundsMismatch::operator==(const GenericBoundsMismatch& rhs) const
 {
-    LUAU_ASSERT(FFlag::LuauSubtypingReportGenericBoundMismatches2);
     return genericName == rhs.genericName && lowerBounds == rhs.lowerBounds && upperBounds == rhs.upperBounds;
 }
 
@@ -1438,6 +1429,12 @@ bool UnappliedTypeFunction::operator==(const UnappliedTypeFunction& rhs) const
 {
     return true;
 }
+
+bool AmbiguousFunctionCall::operator==(const AmbiguousFunctionCall& rhs) const
+{
+    return function == rhs.function && arguments == rhs.arguments;
+}
+
 
 std::string toString(const TypeError& error)
 {
@@ -1672,7 +1669,6 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     }
     else if constexpr (std::is_same_v<T, GenericBoundsMismatch>)
     {
-        LUAU_ASSERT(FFlag::LuauSubtypingReportGenericBoundMismatches2);
         for (auto& lowerBound : e.lowerBounds)
             lowerBound = clone(lowerBound);
         for (auto& upperBound : e.upperBounds)
@@ -1687,6 +1683,11 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     }
     else if constexpr (std::is_same_v<T, UnappliedTypeFunction>)
     {
+    }
+    else if constexpr (std::is_same_v<T, AmbiguousFunctionCall>)
+    {
+        e.function = clone(e.function);
+        e.arguments = clone(e.arguments);
     }
     else
         static_assert(always_false_v<T>, "Non-exhaustive type switch");
