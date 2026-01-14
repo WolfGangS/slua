@@ -10,7 +10,9 @@
 
 #include "lobject.h"
 #include "lstate.h"
+#include "lgc.h"
 #include "lapi.h"
+#include "lstring.h"
 
 // Guard function to prevent direct calls to internal timer wrapper
 int timer_wrapper_guard(lua_State *L)
@@ -729,6 +731,18 @@ static int llevents_handle_event_init(lua_State *L)
 
 void luaSL_setup_llevents_metatable(lua_State *L, int expose_internal_funcs)
 {
+    // Pre-create and fix system strings with memcat 0.
+    // These strings are used by the host to call event handlers.
+    // If they're first created in user memcat context, looking them up
+    // while at the memory limit will throw LUA_ERRMEM.
+    {
+        LUAU_MEMCAT_GUARD(0);
+        luaS_fix(luaS_newliteral(L, LLEVENTS_HANDLEEVENT_KEY));
+        luaS_fix(luaS_newliteral(L, LLEVENTS_TIMER_WRAPPER_GUARD_KEY));
+        luaS_fix(luaS_newliteral(L, LLEVENTS_GLOBAL_NAME));
+        luaS_fix(luaS_newliteral(L, "LLEvents"));
+    }
+
     // Set up destructor for LLEvents
     lua_setuserdatadtor(L, UTAG_LLEVENTS, llevents_dtor);
 
@@ -764,11 +778,11 @@ void luaSL_setup_llevents_metatable(lua_State *L, int expose_internal_funcs)
 
     // Store _handleEvent in registry for host access
     lua_pushcclosurek(L, llevents_handle_event_init, "_handleEvent", 0, llevents_handle_event_cont);
-    lua_setfield(L, LUA_REGISTRYINDEX, "LLEVENTS_HANDLEEVENT");
+    lua_setfield(L, LUA_REGISTRYINDEX, LLEVENTS_HANDLEEVENT_KEY);
 
     // Store timer wrapper guard in registry for listeners() protection
     lua_pushcfunction(L, timer_wrapper_guard, "timer_wrapper_guard");
-    lua_setfield(L, LUA_REGISTRYINDEX, "LLEVENTS_TIMER_WRAPPER_GUARD");
+    lua_setfield(L, LUA_REGISTRYINDEX, LLEVENTS_TIMER_WRAPPER_GUARD_KEY);
 
     if (expose_internal_funcs)
     {

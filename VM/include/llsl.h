@@ -31,6 +31,13 @@ enum class YieldableStatus : uint8_t {
 #define UTAG_LLEVENTS 29
 #define UTAG_LLTIMERS 30
 
+// Internal global names for event/timer managers (hidden from user code)
+#define LLEVENTS_GLOBAL_NAME "/$ LLEvents"
+#define LLTIMERS_GLOBAL_NAME "/$ LLTimers"
+// Registry keys for host access to event handling
+#define LLEVENTS_HANDLEEVENT_KEY "LLEVENTS_HANDLEEVENT"
+#define LLEVENTS_TIMER_WRAPPER_GUARD_KEY "LLEVENTS_TIMER_WRAPPER_GUARD"
+
 struct TString;
 
 // Udatas are 16-byte aligned so don't need to pack this, we use 16 no matter what.

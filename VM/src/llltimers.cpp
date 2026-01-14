@@ -10,7 +10,9 @@
 
 #include "lobject.h"
 #include "lstate.h"
+#include "lgc.h"
 #include "lapi.h"
+#include "lstring.h"
 
 // Timer data table array indices
 enum TimerDataIndex {
@@ -768,6 +770,16 @@ static int lltimers_tostring(lua_State *L)
 
 void luaSL_setup_llltimers_metatable(lua_State *L, int expose_internal_funcs)
 {
+    // Pre-create and fix system strings with memcat 0.
+    // These strings are used by the host to manage timers.
+    // If they're first created in user memcat context, looking them up
+    // while at the memory limit will throw LUA_ERRMEM.
+    {
+        LUAU_MEMCAT_GUARD(0);
+        luaS_fix(luaS_newliteral(L, LLTIMERS_GLOBAL_NAME));
+        luaS_fix(luaS_newliteral(L, "LLTimers"));
+    }
+
     // Set up destructor for LLTimers
     lua_setuserdatadtor(L, UTAG_LLTIMERS, lltimers_dtor);
 
