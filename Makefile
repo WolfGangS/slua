@@ -212,9 +212,9 @@ coverage: $(TESTS_TARGET) $(COMPILE_CLI_TARGET)
 	mv default.profraw codegen-x64.profraw
 	llvm-profdata merge *.profraw -o default.profdata
 	rm *.profraw
-	llvm-cov show -format=html -show-instantiations=false -show-line-counts=true -show-region-summary=false -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -output-dir=coverage --instr-profile default.profdata -object build/coverage/luau-tests -object build/coverage/luau-compile
-	llvm-cov report -ignore-filename-regex=\(tests\|extern\|CLI\|stage\)/.* -show-region-summary=false --instr-profile default.profdata -object build/coverage/luau-tests -object build/coverage/luau-compile
-	llvm-cov export -ignore-filename-regex=\(tests\|extern\|CLI\|stage\)/.* -format lcov --instr-profile default.profdata -object build/coverage/luau-tests -object build/coverage/luau-compile >coverage.info
+	llvm-cov show -format=html -show-instantiations=false -show-line-counts=true -show-region-summary=false -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -output-dir=coverage --instr-profile default.profdata -object build/coverage/slua-tests -object build/coverage/slua-compile
+	llvm-cov report -ignore-filename-regex=\(tests\|extern\|CLI\|stage\)/.* -show-region-summary=false --instr-profile default.profdata -object build/coverage/slua-tests -object build/coverage/slua-compile
+	llvm-cov export -ignore-filename-regex=\(tests\|extern\|CLI\|stage\)/.* -format lcov --instr-profile default.profdata -object build/coverage/slua-tests -object build/coverage/slua-compile >coverage.info
 
 format:
 	git ls-files '*.h' '*.cpp' | xargs clang-format-11 -i
