@@ -77,9 +77,9 @@ jobs:
     - name: make cli
       run: |
          LDFLAGS=-m${{matrix.addrsize}} CXXFLAGS="-m${{matrix.addrsize}} ${{matrix.cflags}} -DHARDSTACKTESTS=1" CFLAGS="-m${{matrix.addrsize}} ${{matrix.cflags}}" make -j4 config=sanitize ${{ matrix.addrsize == '64' && 'native=1' || ''}} werror=1 luau luau-analyze luau-compile # match config with tests to improve build time
-         ./luau tests/conformance/assert.luau
-         ./luau-analyze tests/conformance/assert.luau
-         ./luau-compile tests/conformance/assert.luau
+         ./slua tests/conformance/assert.luau
+         ./slua-analyze tests/conformance/assert.luau
+         ./slua-compile tests/conformance/assert.luau
 
   windows:
     runs-on: windows-2022
@@ -122,9 +122,9 @@ jobs:
         shell: bash # necessary for fail-fast
         run: |
           cmake --build . --target Luau.Repl.CLI Luau.Analyze.CLI Luau.Compile.CLI --config RelWithDebInfo # match config with tests to improve build time
-          RelWithDebInfo/luau tests/conformance/assert.luau
-          RelWithDebInfo/luau-analyze tests/conformance/assert.luau
-          RelWithDebInfo/luau-compile tests/conformance/assert.luau
+          RelWithDebInfo/slua tests/conformance/assert.luau
+          RelWithDebInfo/slua-analyze tests/conformance/assert.luau
+          RelWithDebInfo/slua-compile tests/conformance/assert.luau
 
   coverage:
     runs-on: ubuntu-22.04

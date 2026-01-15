@@ -58,19 +58,19 @@ TESTS_TARGET=$(BUILD)/luau-tests
 
 REPL_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Repl.cpp CLI/src/ReplEntry.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp CLI/src/LSLBuiltins.cpp
 REPL_CLI_OBJECTS=$(REPL_CLI_SOURCES:%=$(BUILD)/%.o)
-REPL_CLI_TARGET=$(BUILD)/luau
+REPL_CLI_TARGET=$(BUILD)/slua
 
 ANALYZE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Analyze.cpp CLI/src/AnalyzeRequirer.cpp CLI/src/VfsNavigator.cpp
 ANALYZE_CLI_OBJECTS=$(ANALYZE_CLI_SOURCES:%=$(BUILD)/%.o)
-ANALYZE_CLI_TARGET=$(BUILD)/luau-analyze
+ANALYZE_CLI_TARGET=$(BUILD)/slua-analyze
 
 COMPILE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Compile.cpp CLI/src/LSLBuiltins.cpp
 COMPILE_CLI_OBJECTS=$(COMPILE_CLI_SOURCES:%=$(BUILD)/%.o)
-COMPILE_CLI_TARGET=$(BUILD)/luau-compile
+COMPILE_CLI_TARGET=$(BUILD)/slua-compile
 
 BYTECODE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Bytecode.cpp
 BYTECODE_CLI_OBJECTS=$(BYTECODE_CLI_SOURCES:%=$(BUILD)/%.o)
-BYTECODE_CLI_TARGET=$(BUILD)/luau-bytecode
+BYTECODE_CLI_TARGET=$(BUILD)/slua-bytecode
 
 FUZZ_SOURCES=$(wildcard fuzz/*.cpp) fuzz/luau.pb.cpp
 FUZZ_OBJECTS=$(FUZZ_SOURCES:%=$(BUILD)/%.o)
@@ -84,7 +84,7 @@ ifneq ($(opt),)
 endif
 
 OBJECTS=$(COMMON_OBJECTS) $(AST_OBJECTS) $(COMPILER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(EQSAT_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS) $(REQUIRE_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(FUZZ_OBJECTS)
-EXECUTABLE_ALIASES = luau luau-analyze luau-compile luau-bytecode luau-tests
+EXECUTABLE_ALIASES = slua slua-analyze slua-compile slua-bytecode luau-tests
 
 # common flags
 # We have to do tailslide builds for `make`-based builds, conditionally including the LSL compiler is annoying in `make`.
