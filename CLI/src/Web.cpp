@@ -190,7 +190,7 @@ extern "C" const char* checkScript(const char* source, int useNewSolver)
         frontend.setLuauSolverMode(useNewSolver ? Luau::SolverMode::New : Luau::SolverMode::Old);
         // Add Luau builtins
         Luau::unfreeze(frontend.globals.globalTypes);
-        Luau::registerBuiltinGlobals(frontend, frontend.globals);
+        Luau::registerBuiltinGlobals(frontend, frontend.globals, false, true);
         Luau::freeze(frontend.globals.globalTypes);
 
         // restart

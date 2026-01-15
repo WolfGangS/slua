@@ -406,6 +406,105 @@ std::string getBuiltinDefinitionSource()
     return result;
 }
 
+static constexpr const char* kBuiltinDefinitionSLuaSrc = R"BUILTIN_SRC(
+declare lljson: {
+  null: any,
+  empty_array_mt: { [any]: any },
+  array_mt: { [any]: any },
+  empty_array: any,
+  _NAME: string,
+  _VERSION: string,
+  encode: @checked (value: any) -> string,
+  decode: @checked (json: string) -> any,
+  slencode: @checked (value: any, tight: boolean?) -> string,
+  sldecode: @checked (json: string) -> any,
+}
+  
+
+declare llbase64: {
+  encode: @checked (data: string | buffer) -> string,
+  decode: @checked ((data: string) -> string) & ((data: string, asBuffer: boolean?) -> string | buffer),
+}
+
+declare extern type quaternion with
+  x: number
+  y: number
+  z: number
+  s: number
+  function __add(self, other: quaternion): quaternion
+  function __sub(self, other: quaternion): quaternion
+  function __mul(self, other: quaternion): quaternion
+  function __div(self, other: quaternion): quaternion
+  function __unm(self): quaternion
+  function __eq(self, other: quaternion): boolean
+  function __tostring(self): string
+end
+
+declare extern type uuid with
+  istruthy: boolean
+  bytes: string?
+  function __tostring(self): string
+end
+
+declare function quaternion(x: number, y: number, z: number, s: number): quaternion
+
+declare quaternion: {
+  identity: quaternion,
+  create: @checked (x: number, y: number, z: number, s: number) -> quaternion,
+  normalize: @checked (q: quaternion) -> quaternion,
+  magnitude: @checked (q: quaternion) -> number,
+  dot: @checked (a: quaternion, b: quaternion) -> number,
+  slerp: @checked (a: quaternion, b: quaternion, t: number) -> quaternion,
+  conjugate: @checked (q: quaternion) -> quaternion,
+  tofwd: @checked (q: quaternion) -> vector,
+  toleft: @checked (q: quaternion) -> vector,
+  toup: @checked (q: quaternion) -> vector,
+}
+
+
+declare rotation: typeof(quaternion)
+declare uuid: {
+  create: @checked (value: string | buffer | uuid) -> uuid?,
+}
+
+declare loadstring: nil
+declare getfenv: nil
+declare setfenv: nil
+declare function touuid(val: string | buffer | uuid): uuid?
+declare function tovector(val: any): vector?
+declare function toquaternion(val: any): quaternion?
+declare function torotation(val: any): quaternion?
+
+declare table: {
+  concat: (list: {string}, sep: string?, i: number?, j: number?) -> string,
+  foreach: (t: {[any]: any}, f: (key: any, value: any) -> any) -> any?,
+  foreachi: (t: {any}, f: (index: number, value: any) -> any) -> any?,
+  getn: (t: {any}) -> number,
+  maxn: (t: {any}) -> number,
+  insert: ((list: {any}, value: any) -> ()) & ((list: {any}, pos: number, value: any) -> ()),
+  remove: (list: {any}, pos: number?) -> any?,
+  sort: (list: {any}, comp: ((a: any, b: any) -> boolean)?) -> (),
+  pack: (...any) -> { n: number, [number]: any },
+  unpack: (list: {any}, i: number?, j: number?) -> ...any,
+  move: (a1: {any}, f: number, e: number, t: number, a2: {any}?) -> {any},
+  create: (count: number, value: any?) -> {any},
+  find: (t: {any}, value: any, init: number?) -> number?,
+  clear: (t: {[any]: any}) -> (),
+  freeze: (t: {[any]: any}) -> {[any]: any},
+  isfrozen: (t: {[any]: any}) -> boolean,
+  clone: (t: {[any]: any}) -> {[any]: any},
+  shrink: (t: {[any]: any}, newsize: number) -> {[any]: any},
+}
+
+)BUILTIN_SRC";
+
+std::string getBuiltinDefinitionSLuaSource()
+{
+    std::string result = kBuiltinDefinitionSLuaSrc;
+
+    return result;
+}
+
 // TODO: split into separate tagged unions when the new solver can appropriately handle that.
 static constexpr const char* kBuiltinDefinitionTypeMethodSrc = R"BUILTIN_SRC(
 

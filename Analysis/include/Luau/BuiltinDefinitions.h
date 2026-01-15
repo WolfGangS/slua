@@ -17,7 +17,7 @@ struct TypeChecker;
 struct TypeArena;
 struct Subtyping;
 
-void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete = false);
+void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete = false, bool typeCheckForSLua = false);
 TypeId makeUnion(TypeArena& arena, std::vector<TypeId>&& types);
 TypeId makeIntersection(TypeArena& arena, std::vector<TypeId>&& types);
 
@@ -70,6 +70,7 @@ Property makeProperty(TypeId ty, std::optional<std::string> documentationSymbol 
 void assignPropDocumentationSymbols(TableType::Props& props, const std::string& baseName);
 
 std::string getBuiltinDefinitionSource();
+std::string getBuiltinDefinitionSLuaSource();
 std::string getTypeFunctionDefinitionSource();
 
 void addGlobalBinding(GlobalTypes& globals, const std::string& name, TypeId ty, const std::string& packageName);

@@ -353,7 +353,7 @@ static void finalizeGlobalBindings(ScopePtr scope)
     }
 }
 
-void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete)
+void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete, bool typeCheckForSLua)
 {
     LUAU_ASSERT(!globals.globalTypes.types.isFrozen());
     LUAU_ASSERT(!globals.globalTypes.typePacks.isFrozen());
@@ -378,6 +378,13 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
         globals, globals.globalScope, getBuiltinDefinitionSource(), "@luau", /* captureComments */ false, typeCheckForAutocomplete
     );
     LUAU_ASSERT(loadResult.success);
+
+    if (typeCheckForSLua) {
+        loadResult = frontend.loadDefinitionFile(
+            globals, globals.globalScope, getBuiltinDefinitionSLuaSource(), "@luau", /* captureComments */ false, typeCheckForAutocomplete
+        );
+        LUAU_ASSERT(loadResult.success);
+    }
 
     TypeId genericK =
         FFlag::LuauStorePolarityInline ? arena.addType(GenericType{globalScope, "K", Polarity::Mixed}) : arena.addType(GenericType{globalScope, "K"});

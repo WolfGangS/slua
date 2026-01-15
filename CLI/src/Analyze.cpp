@@ -466,7 +466,7 @@ int main(int argc, char** argv)
         };
     }
 
-    Luau::registerBuiltinGlobals(frontend, frontend.globals);
+    Luau::registerBuiltinGlobals(frontend, frontend.globals, false, true);
     Luau::freeze(frontend.globals.globalTypes);
 
 #ifdef CALLGRIND
