@@ -228,19 +228,19 @@ check-source:
 	git ls-files '*.h' ':!:extern' | xargs -I+ sh -c 'grep -L "#pragma once" +'
 
 # executable target aliases
-luau: $(REPL_CLI_TARGET)
+slua: $(REPL_CLI_TARGET)
 	ln -fs $^ $@
 
-luau-analyze: $(ANALYZE_CLI_TARGET)
+slua-analyze: $(ANALYZE_CLI_TARGET)
 	ln -fs $^ $@
 
-luau-compile: $(COMPILE_CLI_TARGET)
+slua-compile: $(COMPILE_CLI_TARGET)
 	ln -fs $^ $@
 
-luau-bytecode: $(BYTECODE_CLI_TARGET)
+slua-bytecode: $(BYTECODE_CLI_TARGET)
 	ln -fs $^ $@
 
-luau-tests: $(TESTS_TARGET)
+slua-tests: $(TESTS_TARGET)
 	ln -fs $^ $@
 
 # executable targets
