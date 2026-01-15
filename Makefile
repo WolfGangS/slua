@@ -54,7 +54,7 @@ ISOCLINE_TARGET=$(BUILD)/libisocline.a
 
 TESTS_SOURCES=$(wildcard tests/*.cpp) CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Repl.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp CLI/src/LSLBuiltins.cpp
 TESTS_OBJECTS=$(TESTS_SOURCES:%=$(BUILD)/%.o)
-TESTS_TARGET=$(BUILD)/luau-tests
+TESTS_TARGET=$(BUILD)/slua-tests
 
 REPL_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Repl.cpp CLI/src/ReplEntry.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp CLI/src/LSLBuiltins.cpp
 REPL_CLI_OBJECTS=$(REPL_CLI_SOURCES:%=$(BUILD)/%.o)
@@ -84,7 +84,7 @@ ifneq ($(opt),)
 endif
 
 OBJECTS=$(COMMON_OBJECTS) $(AST_OBJECTS) $(COMPILER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(EQSAT_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS) $(REQUIRE_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(FUZZ_OBJECTS)
-EXECUTABLE_ALIASES = slua slua-analyze slua-compile slua-bytecode luau-tests
+EXECUTABLE_ALIASES = slua slua-analyze slua-compile slua-bytecode slua-tests
 
 # common flags
 # We have to do tailslide builds for `make`-based builds, conditionally including the LSL compiler is annoying in `make`.
