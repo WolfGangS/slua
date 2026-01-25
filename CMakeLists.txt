@@ -13,6 +13,11 @@ option(LUAU_WERROR "Warnings as errors" OFF)
 option(LUAU_STATIC_CRT "Link with the static CRT (/MT)" OFF)
 option(LUAU_EXTERN_C "Use extern C for all APIs" OFF)
 option(LUAU_USE_TAILSLIDE "Link against tailslide for LSL support" OFF)
+option(LUAU_BUILD_SHARED "Build as a shared library" OFF)
+
+if(LUAU_BUILD_SHARED AND NOT LUAU_EXTERN_C)
+    message(FATAL_ERROR "LUAU_BUILD_SHARED requires LUAU_EXTERN_C to be ON")
+endif()
 
 cmake_policy(SET CMP0054 NEW)
 if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.15")
@@ -39,21 +44,34 @@ project(Luau LANGUAGES CXX C)
 file(READ "${CMAKE_SOURCE_DIR}/builtins.txt" BUILTINS_HEX HEX)
 string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1, " BUILTINS_HEX_ARRAY "${BUILTINS_HEX}")
 configure_file(
-    "${CMAKE_SOURCE_DIR}/CLI/src/builtins_embedded.h.in"
-    "${CMAKE_BINARY_DIR}/builtins_embedded.h"
-    @ONLY
+        "${CMAKE_SOURCE_DIR}/CLI/src/builtins_embedded.h.in"
+        "${CMAKE_BINARY_DIR}/builtins_embedded.h"
+        @ONLY
 )
 
-add_library(Luau.Common STATIC)
-add_library(Luau.CLI.lib STATIC)
-add_library(Luau.Ast STATIC)
-add_library(Luau.Compiler STATIC)
-add_library(Luau.Config STATIC)
-add_library(Luau.Analysis STATIC)
-add_library(Luau.CodeGen STATIC)
-add_library(Luau.VM STATIC)
-add_library(Luau.Require STATIC)
-add_library(isocline STATIC)
+if (LUAU_BUILD_SHARED)
+    add_library(Luau.Common SHARED)
+    add_library(Luau.CLI.lib SHARED)
+    add_library(Luau.Ast SHARED)
+    add_library(Luau.Compiler SHARED)
+    add_library(Luau.Config SHARED)
+    add_library(Luau.Analysis SHARED)
+    add_library(Luau.CodeGen SHARED)
+    add_library(Luau.VM SHARED)
+    add_library(Luau.Require SHARED)
+    add_library(isocline SHARED)
+else()
+    add_library(Luau.Common STATIC)
+    add_library(Luau.CLI.lib STATIC)
+    add_library(Luau.Ast STATIC)
+    add_library(Luau.Compiler STATIC)
+    add_library(Luau.Config STATIC)
+    add_library(Luau.Analysis STATIC)
+    add_library(Luau.CodeGen STATIC)
+    add_library(Luau.VM STATIC)
+    add_library(Luau.Require STATIC)
+    add_library(isocline STATIC)
+endif()
 
 if(LUAU_BUILD_CLI)
     add_executable(Luau.Repl.CLI)
@@ -185,9 +203,24 @@ if(LUAU_EXTERN_C)
     # enable extern "C" for VM (lua.h, lualib.h) and Compiler (luacode.h) to make Luau friendlier to use from non-C++ languages
     # note that we enable LUA_USE_LONGJMP=1 as well; otherwise functions like luaL_error will throw C++ exceptions, which can't be done from extern "C" functions
     target_compile_definitions(Luau.VM PUBLIC LUA_USE_LONGJMP=1)
-    target_compile_definitions(Luau.VM PUBLIC LUA_API=extern\"C\")
-    target_compile_definitions(Luau.Compiler PUBLIC LUACODE_API=extern\"C\")
-    target_compile_definitions(Luau.CodeGen PUBLIC LUACODEGEN_API=extern\"C\")
+
+    if(LUAU_BUILD_SHARED)
+        if(MSVC)
+            target_compile_definitions(Luau.VM PUBLIC "LUA_API=extern \"C\" __declspec(dllexport)")
+            target_compile_definitions(Luau.Compiler PUBLIC "LUACODE_API=extern \"C\" __declspec(dllexport)")
+            target_compile_definitions(Luau.CodeGen PUBLIC "LUACODEGEN_API=extern \"C\" __declspec(dllexport)")
+        else()
+            # GCC/Clang
+            target_compile_definitions(Luau.VM PUBLIC "LUA_API=extern \"C\" __attribute__((visibility(\"default\")))")
+            target_compile_definitions(Luau.Compiler PUBLIC "LUACODE_API=extern \"C\" __attribute__((visibility(\"default\")))")
+            target_compile_definitions(Luau.CodeGen PUBLIC "LUACODEGEN_API=extern \"C\" __attribute__((visibility(\"default\")))")
+        endif()
+    else()
+        # For static builds (or if not exporting) just use extern "C"
+        target_compile_definitions(Luau.VM PUBLIC "LUA_API=extern \"C\"")
+        target_compile_definitions(Luau.Compiler PUBLIC "LUACODE_API=extern \"C\"")
+        target_compile_definitions(Luau.CodeGen PUBLIC "LUACODEGEN_API=extern \"C\"")
+    endif()
 endif()
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" AND MSVC_VERSION GREATER_EQUAL 1924)
@@ -205,6 +238,11 @@ if(MSVC AND LUAU_BUILD_CLI)
     # the default stack size that MSVC linker uses is 1 MB; we need more stack space in Debug because stack frames are larger
     set_target_properties(Luau.Analyze.CLI PROPERTIES LINK_FLAGS_DEBUG /STACK:2097152)
     set_target_properties(Luau.Repl.CLI PROPERTIES LINK_FLAGS_DEBUG /STACK:2097152)
+endif()
+
+if(MSVC AND LUAU_BUILD_TESTS)
+    # the default stack size that MSVC linker uses is 1 MB; we need more stack space in Debug because stack frames are larger
+    set_target_properties(Luau.CLI.Test PROPERTIES LINK_FLAGS_DEBUG /STACK:2097152)
 endif()
 
 # embed .natvis inside the library debug information
