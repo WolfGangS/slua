@@ -19,6 +19,7 @@
 #include "Luau/RecursionCounter.h"
 #include "Luau/ScopedSeenSet.h"
 #include "Luau/Simplify.h"
+#include "Luau/SubtypingUnifier.h"
 #include "Luau/TableLiteralInference.h"
 #include "Luau/TimeTrace.h"
 #include "Luau/ToString.h"
@@ -41,14 +42,12 @@ LUAU_FASTFLAGVARIABLE(DebugLuauAssertOnForcedConstraint)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogSolver)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogSolverIncludeDependencies)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogBindings)
-LUAU_FASTFLAGVARIABLE(LuauDontDynamicallyCreateRedundantSubtypeConstraints)
-LUAU_FASTFLAG(DebugLuauStringSingletonBasedOnQuotes)
 LUAU_FASTFLAG(LuauExplicitTypeInstantiationSupport)
 LUAU_FASTFLAG(LuauInstantiationUsesGenericPolarity2)
 LUAU_FASTFLAG(LuauPushTypeConstraintLambdas3)
 LUAU_FASTFLAG(LuauMarkUnscopedGenericsAsSolved)
 LUAU_FASTFLAGVARIABLE(LuauUseFastSubtypeForIndexerWithName)
-LUAU_FASTFLAG(LuauUseIterativeTypeVisitor)
+LUAU_FASTFLAGVARIABLE(LuauUnifyWithSubtyping)
 LUAU_FASTFLAGVARIABLE(LuauDoNotUseApplyTypeFunctionToClone)
 LUAU_FASTFLAGVARIABLE(LuauReworkInfiniteTypeFinder)
 
@@ -332,8 +331,7 @@ struct InstantiationQueuer : TypeOnceVisitor
     }
 };
 
-template<typename BaseVisitor>
-struct InfiniteTypeFinder : BaseVisitor
+struct InfiniteTypeFinder : IterativeTypeVisitor
 {
     NotNull<ConstraintSolver> solver;
     const InstantiationSignature& signature;
@@ -341,7 +339,7 @@ struct InfiniteTypeFinder : BaseVisitor
     bool foundInfiniteType = false;
 
     explicit InfiniteTypeFinder(ConstraintSolver* solver, const InstantiationSignature& signature, NotNull<Scope> scope)
-        : BaseVisitor("InfiniteTypeFinder", /* skipBoundTypes */ true)
+        : IterativeTypeVisitor("InfiniteTypeFinder", /* skipBoundTypes */ true)
         , solver(solver)
         , signature(signature)
         , scope(scope)
@@ -1191,37 +1189,18 @@ bool ConstraintSolver::tryDispatch(const NameConstraint& c, NotNull<const Constr
             c.typePackParameters,
         };
 
-        if (FFlag::LuauUseIterativeTypeVisitor)
-        {
-            InfiniteTypeFinder<IterativeTypeVisitor> itf{this, signature, constraint->scope};
-            itf.run(target);
+        InfiniteTypeFinder itf{this, signature, constraint->scope};
+        itf.run(target);
 
-            if (itf.foundInfiniteType)
-            {
-                if (FFlag::LuauReworkInfiniteTypeFinder)
-                    constraint->scope->invalidTypeAliases[c.name] = constraint->location;
-                else
-                    constraint->scope->invalidTypeAliasNames_DEPRECATED.insert(c.name);
-                shiftReferences(target, builtinTypes->errorType);
-                emplaceType<BoundType>(asMutable(target), builtinTypes->errorType);
-                return true;
-            }
-        }
-        else
+        if (itf.foundInfiniteType)
         {
-            InfiniteTypeFinder<TypeOnceVisitor> itf{this, signature, constraint->scope};
-            itf.traverse(target);
-
-            if (itf.foundInfiniteType)
-            {
-                if (FFlag::LuauReworkInfiniteTypeFinder)
-                    constraint->scope->invalidTypeAliases[c.name] = constraint->location;
-                else
-                    constraint->scope->invalidTypeAliasNames_DEPRECATED.insert(c.name);
-                shiftReferences(target, builtinTypes->errorType);
-                emplaceType<BoundType>(asMutable(target), builtinTypes->errorType);
-                return true;
-            }
+            if (FFlag::LuauReworkInfiniteTypeFinder)
+                constraint->scope->invalidTypeAliases[c.name] = constraint->location;
+            else
+                constraint->scope->invalidTypeAliasNames_DEPRECATED.insert(c.name);
+            shiftReferences(target, builtinTypes->errorType);
+            emplaceType<BoundType>(asMutable(target), builtinTypes->errorType);
+            return true;
         }
     }
 
@@ -1359,37 +1338,18 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     // https://github.com/luau-lang/luau/pull/68 for the RFC responsible for
     // this. This is a little nicer than using a recursion limit because we can
     // catch the infinite expansion before actually trying to expand it.
-    if (FFlag::LuauUseIterativeTypeVisitor)
-    {
-        InfiniteTypeFinder<IterativeTypeVisitor> itf{this, signature, constraint->scope};
-        itf.run(tf->type);
+    InfiniteTypeFinder itf{this, signature, constraint->scope};
+    itf.run(tf->type);
 
-        if (itf.foundInfiniteType)
-        {
-            // TODO (CLI-56761): Report an error.
-            bindResult(builtinTypes->errorType);
-            if (FFlag::LuauReworkInfiniteTypeFinder)
-                constraint->scope->invalidTypeAliases[petv->name.value] = constraint->location;
-            else
-                reportError(GenericError{"Recursive type being used with different parameters"}, constraint->location);
-            return true;
-        }
-    }
-    else
+    if (itf.foundInfiniteType)
     {
-        InfiniteTypeFinder<TypeOnceVisitor> itf{this, signature, constraint->scope};
-        itf.traverse(tf->type);
-
-        if (itf.foundInfiniteType)
-        {
-            // TODO (CLI-56761): Report an error.
-            bindResult(builtinTypes->errorType);
-            if (FFlag::LuauReworkInfiniteTypeFinder)
-                constraint->scope->invalidTypeAliases[petv->name.value] = constraint->location;
-            else
-                reportError(GenericError{"Recursive type being used with different parameters"}, constraint->location);
-            return true;
-        }
+        // TODO (CLI-56761): Report an error.
+        bindResult(builtinTypes->errorType);
+        if (FFlag::LuauReworkInfiniteTypeFinder)
+            constraint->scope->invalidTypeAliases[petv->name.value] = constraint->location;
+        else
+            reportError(GenericError{"Recursive type being used with different parameters"}, constraint->location);
+        return true;
     }
 
     // FIXME: this does not actually implement instantiation properly, it puts
@@ -1685,8 +1645,8 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
         trackInteriorFreeTypePack(constraint->scope, c.result);
     }
 
-
     TypeId inferredTy = arena->addType(FunctionType{TypeLevel{}, argsPack, c.result});
+
     Unifier2 u2{NotNull{arena}, builtinTypes, constraint->scope, NotNull{&iceReporter}};
 
     // TODO: This should probably use ConstraintSolver::unify
@@ -1938,8 +1898,9 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
                     }
                 }
                 Subtyping subtyping{builtinTypes, arena, normalizer, typeFunctionRuntime, NotNull{&iceReporter}};
-                PushTypeResult result =
-                    pushTypeInto_DEPRECATED(c.astTypes, c.astExpectedTypes, NotNull{this}, constraint, NotNull{&u2}, NotNull{&subtyping}, expectedArgTy, expr);
+                PushTypeResult result = pushTypeInto_DEPRECATED(
+                    c.astTypes, c.astExpectedTypes, NotNull{this}, constraint, NotNull{&u2}, NotNull{&subtyping}, expectedArgTy, expr
+                );
                 // Consider:
                 //
                 //  local Direction = { Left = 1, Right = 2 }
@@ -1996,7 +1957,6 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
 
 bool ConstraintSolver::tryDispatch(const PrimitiveTypeConstraint& c, NotNull<const Constraint> constraint)
 {
-    LUAU_ASSERT(!FFlag::DebugLuauStringSingletonBasedOnQuotes);
     std::optional<TypeId> expectedType = c.expectedType ? std::make_optional<TypeId>(follow(*c.expectedType)) : std::nullopt;
     if (expectedType && (isBlocked(*expectedType) || get<PendingExpansionType>(*expectedType)))
         return block(*expectedType, constraint);
@@ -2924,10 +2884,16 @@ bool ConstraintSolver::tryDispatch(const TypeInstantiationConstraint& c, NotNull
 }
 
 template<typename T, typename Predicate>
-void dropWhile(std::vector<T>& vec, Predicate pred) {
-    auto it = std::find_if(vec.begin(), vec.end(), [&pred](const T& elem) {
-        return !pred(elem);
-    });
+void dropWhile(std::vector<T>& vec, Predicate pred)
+{
+    auto it = std::find_if(
+        vec.begin(),
+        vec.end(),
+        [&pred](const T& elem)
+        {
+            return !pred(elem);
+        }
+    );
     vec.erase(vec.begin(), it);
 }
 
@@ -2989,8 +2955,20 @@ TypeId ConstraintSolver::instantiateFunctionType(
     FunctionType* ft2 = getMutable<FunctionType>(*result);
 
     // we must remove the portions we successfully instantiated
-    dropWhile(ft2->generics, [](const TypeId& ty) { return !is<GenericType>(follow(ty)); });
-    dropWhile(ft2->genericPacks, [](const TypePackId& ty) { return !is<GenericTypePack>(follow(ty)); });
+    dropWhile(
+        ft2->generics,
+        [](const TypeId& ty)
+        {
+            return !is<GenericType>(follow(ty));
+        }
+    );
+    dropWhile(
+        ft2->genericPacks,
+        [](const TypePackId& ty)
+        {
+            return !is<GenericTypePack>(follow(ty));
+        }
+    );
 
     return *result;
 }
@@ -3552,41 +3530,84 @@ TablePropLookupResult ConstraintSolver::lookupTableProp(
 template<typename TID>
 bool ConstraintSolver::unify(NotNull<const Constraint> constraint, TID subTy, TID superTy)
 {
-    Unifier2 u2{NotNull{arena}, builtinTypes, constraint->scope, NotNull{&iceReporter}, &uninhabitedTypeFunctions};
+    static_assert(std::is_same_v<TID, TypeId> || std::is_same_v<TID, TypePackId>);
 
-    const UnifyResult unifyResult = u2.unify(subTy, superTy);
-
-    for (ConstraintV& c : u2.incompleteSubtypes)
+    if (FFlag::LuauUnifyWithSubtyping)
     {
-        NotNull<Constraint> addition = pushConstraint(constraint->scope, constraint->location, std::move(c));
-        inheritBlocks(constraint, addition);
-    }
+        Subtyping subtyping{builtinTypes, arena, normalizer, typeFunctionRuntime, NotNull{&iceReporter}};
+        SubtypingUnifier stu{arena, builtinTypes, NotNull{&iceReporter}};
+        SubtypingResult result;
+        if constexpr (std::is_same_v<TID, TypeId>)
+            result = subtyping.isSubtype(subTy, superTy, constraint->scope);
+        else if constexpr (std::is_same_v<TID, TypePackId>)
+            result = subtyping.isSubtype(subTy, superTy, constraint->scope, {});
 
-    if (UnifyResult::Ok == unifyResult)
-    {
-        for (const auto& [expanded, additions] : u2.expandedFreeTypes)
+        auto unifierResult = stu.dispatchConstraints(constraint, std::move(result.assumedConstraints));
+
+        for (auto& cv : unifierResult.outstandingConstraints)
         {
-            for (TypeId addition : additions)
-                upperBoundContributors[expanded].emplace_back(constraint->location, addition);
+            auto newConstraint = pushConstraint(constraint->scope, constraint->location, std::move(cv));
+            inheritBlocks(constraint, newConstraint);
+        }
+
+        for (const auto& [ty, newUpperBounds] : unifierResult.upperBoundContributors)
+        {
+            auto& upperBounds = upperBoundContributors[ty];
+            upperBounds.insert(upperBounds.end(), newUpperBounds.begin(), newUpperBounds.end());
+        }
+
+        switch (unifierResult.unified)
+        {
+        case UnifyResult::OccursCheckFailed:
+            reportError(OccursCheckFailed{}, constraint->location);
+            return false;
+        case UnifyResult::TooComplex:
+            reportError(UnificationTooComplex{}, constraint->location);
+            return false;
+        case UnifyResult::Ok:
+        default:
+            return true;
         }
     }
     else
     {
-        switch (unifyResult)
+        Unifier2 u2{NotNull{arena}, builtinTypes, constraint->scope, NotNull{&iceReporter}, &uninhabitedTypeFunctions};
+
+        const UnifyResult unifyResult = u2.unify(subTy, superTy);
+
+        for (ConstraintV& c : u2.incompleteSubtypes)
         {
-        case Luau::UnifyResult::Ok:
-            break;
-        case Luau::UnifyResult::OccursCheckFailed:
-            reportError(OccursCheckFailed{}, constraint->location);
-            break;
-        case Luau::UnifyResult::TooComplex:
-            reportError(UnificationTooComplex{}, constraint->location);
-            break;
+            NotNull<Constraint> addition = pushConstraint(constraint->scope, constraint->location, std::move(c));
+            inheritBlocks(constraint, addition);
         }
-        return false;
+
+        if (UnifyResult::Ok == unifyResult)
+        {
+            for (const auto& [expanded, additions] : u2.expandedFreeTypes)
+            {
+                for (TypeId addition : additions)
+                    upperBoundContributors[expanded].emplace_back(constraint->location, addition);
+            }
+        }
+        else
+        {
+            switch (unifyResult)
+            {
+            case Luau::UnifyResult::Ok:
+                break;
+            case Luau::UnifyResult::OccursCheckFailed:
+                reportError(OccursCheckFailed{}, constraint->location);
+                break;
+            case Luau::UnifyResult::TooComplex:
+                reportError(UnificationTooComplex{}, constraint->location);
+                break;
+            }
+            return false;
+        }
+
+        return true;
     }
 
-    return true;
 }
 
 bool ConstraintSolver::block_(BlockedConstraintId target, NotNull<const Constraint> constraint)
@@ -3797,6 +3818,10 @@ void ConstraintSolver::reproduceConstraints(NotNull<Scope> scope, const Location
 
 bool ConstraintSolver::isBlocked(TypeId ty) const
 {
+    // FIXME CLI-180636: Eventually this should use the same logic as
+    // `SubtypingUnifier`, which is that blocked types are only based
+    // on their type and any additional state, rather than looking at
+    // `uninhabitedTypeFunctions`.
     ty = follow(ty);
 
     if (auto tfit = get<TypeFunctionInstanceType>(ty))
@@ -3828,13 +3853,10 @@ bool ConstraintSolver::isBlocked(NotNull<const Constraint> constraint) const
 NotNull<Constraint> ConstraintSolver::pushConstraint(NotNull<Scope> scope, const Location& location, ConstraintV cv)
 {
     std::optional<SubtypeConstraintRecord> scr;
-    if (FFlag::LuauDontDynamicallyCreateRedundantSubtypeConstraints)
-    {
-        if (auto sc = cv.get_if<SubtypeConstraint>())
-            scr.emplace(SubtypeConstraintRecord{sc->subType, sc->superType, SubtypingVariance::Covariant});
-        else if (auto ec = cv.get_if<EqualityConstraint>())
-            scr.emplace(SubtypeConstraintRecord{ec->assignmentType, ec->resultType, SubtypingVariance::Invariant});
-    }
+    if (auto sc = cv.get_if<SubtypeConstraint>())
+        scr.emplace(SubtypeConstraintRecord{sc->subType, sc->superType, SubtypingVariance::Covariant});
+    else if (auto ec = cv.get_if<EqualityConstraint>())
+        scr.emplace(SubtypeConstraintRecord{ec->assignmentType, ec->resultType, SubtypingVariance::Invariant});
 
     if (scr)
     {

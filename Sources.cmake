@@ -6,6 +6,7 @@ target_sources(Luau.Common PRIVATE
     Common/include/Luau/DenseHash.h
     Common/include/Luau/ExperimentalFlags.h
     Common/include/Luau/HashUtil.h
+    Common/include/Luau/SmallVector.h
     Common/include/Luau/StringUtils.h
     Common/include/Luau/TimeTrace.h
     Common/include/Luau/Variant.h
@@ -234,6 +235,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/StructuralTypeEquality.h
     Analysis/include/Luau/Substitution.h
     Analysis/include/Luau/Subtyping.h
+    Analysis/include/Luau/SubtypingUnifier.h
     Analysis/include/Luau/SubtypingVariance.h
     Analysis/include/Luau/Symbol.h
     Analysis/include/Luau/TableLiteralInference.h
@@ -266,6 +268,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/UserDefinedTypeFunction.h
     Analysis/include/Luau/VisitType.h
     Analysis/include/Luau/IterativeTypeVisitor.h
+    Analysis/include/Luau/IterativeTypeFunctionTypeVisitor.h
 
     Analysis/src/Anyification.cpp
     Analysis/src/ApplyTypeFunction.cpp
@@ -297,6 +300,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/Instantiation2.cpp
     Analysis/src/IostreamHelpers.cpp
     Analysis/src/IterativeTypeVisitor.cpp
+    Analysis/src/IterativeTypeFunctionTypeVisitor.cpp
     Analysis/src/JsonEmitter.cpp
     Analysis/src/Linter.cpp
     Analysis/src/LValue.cpp
@@ -313,6 +317,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/StructuralTypeEquality.cpp
     Analysis/src/Substitution.cpp
     Analysis/src/Subtyping.cpp
+    Analysis/src/SubtypingUnifier.cpp
     Analysis/src/Symbol.cpp
     Analysis/src/TableLiteralInference.cpp
     Analysis/src/ToDot.cpp

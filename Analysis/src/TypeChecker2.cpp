@@ -37,13 +37,12 @@ LUAU_FASTFLAG(DebugLuauMagicTypes)
 LUAU_FASTFLAG(LuauExplicitTypeInstantiationSyntax)
 LUAU_FASTFLAG(LuauExplicitTypeInstantiationSupport)
 
-LUAU_FASTFLAGVARIABLE(LuauIceLess)
-LUAU_FASTFLAGVARIABLE(LuauCheckForInWithSubtyping3)
-LUAU_FASTFLAGVARIABLE(LuauHandleFunctionOversaturation)
 LUAU_FASTFLAG(LuauBetterTypeMismatchErrors)
-LUAU_FASTFLAGVARIABLE(LuauFixIndexingUnionWithNonTable)
-LUAU_FASTFLAGVARIABLE(LuauCheckFunctionStatementTypes)
+LUAU_FASTFLAG(LuauMorePreciseErrorSuppression)
 LUAU_FASTFLAG(LuauReworkInfiniteTypeFinder)
+LUAU_FASTFLAGVARIABLE(LuauCheckForInWithSubtyping3)
+LUAU_FASTFLAGVARIABLE(LuauCheckFunctionStatementTypes)
+LUAU_FASTFLAGVARIABLE(LuauFixIndexingUnionWithNonTable)
 
 namespace Luau
 {
@@ -1471,7 +1470,8 @@ void TypeChecker2::visit(AstExprConstantBool* expr)
     NotNull<Scope> scope{findInnermostScope(expr->location)};
 
     SubtypingResult r = subtyping->isSubtype(bestType, inferredType, scope);
-    if (!isErrorSuppressing(expr->location, inferredType))
+    bool suppress = FFlag::LuauMorePreciseErrorSuppression ? r.isErrorSuppressing : isErrorSuppressing(expr->location, inferredType);
+    if (!suppress)
     {
         if (!r.isSubtype)
             reportError(TypeMismatch{inferredType, bestType}, expr->location);
@@ -1607,10 +1607,21 @@ void TypeChecker2::visitCall(AstExprCall* call)
         if (result.isSubtype)
             fnTy = follow(*selectedOverloadTy);
 
-        if (!isErrorSuppressing(call->location, *selectedOverloadTy))
+        if (FFlag::LuauMorePreciseErrorSuppression)
         {
-            for (auto& e : result.errors)
-                e.location = call->location;
+            if (result.isErrorSuppressing)
+            {
+                for (auto& e : result.errors)
+                    e.location = call->location;
+            }
+        }
+        else
+        {
+            if (!isErrorSuppressing(call->location, *selectedOverloadTy))
+            {
+                for (auto& e : result.errors)
+                    e.location = call->location;
+            }
         }
         reportErrors(std::move(result.errors));
         if (result.normalizationTooComplex)
@@ -1625,13 +1636,8 @@ void TypeChecker2::visitCall(AstExprCall* call)
         AstExprIndexName* indexExpr = call->func->as<AstExprIndexName>();
         if (!indexExpr)
         {
-            if (FFlag::LuauIceLess)
-            {
-                reportError(InternalError{"method call expression has no 'self'"}, call->location);
-                return;
-            }
-            else
-                ice->ice("method call expression has no 'self'");
+            reportError(InternalError{"method call expression has no 'self'"}, call->location);
+            return;
         }
 
         args.head.push_back(lookupType(indexExpr->expr));
@@ -1646,76 +1652,31 @@ void TypeChecker2::visitCall(AstExprCall* call)
 
         std::vector<TypeId> paramsHead = extendTypePack(module->internalTypes, builtinTypes, fty->argTypes, call->args.size + selfOffset).head;
 
-        if (FFlag::LuauHandleFunctionOversaturation)
+        for (size_t idx = 0; idx < call->args.size; ++idx)
         {
-            for (size_t idx = 0; idx < call->args.size; ++idx)
-            {
-                AstExpr* argExpr = call->args.data[idx];
+            AstExpr* argExpr = call->args.data[idx];
 
-                // The last argument might be an ordinary value, but it can also be an entire pack.
-                if (idx == call->args.size - 1)
-                {
-                    if (TypePackId* lastArgPack = module->astTypePacks.find(argExpr))
-                    {
-                        auto [lastArgHead, lastArgTail] = flatten(*lastArgPack);
-                        args.head.insert(args.head.end(), lastArgHead.begin(), lastArgHead.end());
-                        args.tail = lastArgTail;
-                        continue;
-                    }
-                }
-
-                TypeId argExprType = lookupType(argExpr);
-                argExprs.push_back(argExpr);
-                if (idx + selfOffset >= paramsHead.size() || isErrorSuppressing(argExpr->location, argExprType))
-                    args.head.push_back(argExprType);
-                else
-                {
-                    testLiteralOrAstTypeIsSubtype(argExpr, paramsHead[idx + selfOffset]);
-                    args.head.push_back(paramsHead[idx + selfOffset]);
-                }
-            }
-        }
-        else
-        {
-            for (size_t idx = 0; idx < call->args.size - 1; ++idx)
+            // The last argument might be an ordinary value, but it can also be an entire pack.
+            if (idx == call->args.size - 1)
             {
-                auto argExpr = call->args.data[idx];
-                auto argExprType = lookupType(argExpr);
-                argExprs.push_back(argExpr);
-                if (idx + selfOffset >= paramsHead.size() || isErrorSuppressing(argExpr->location, argExprType))
+                if (TypePackId* lastArgPack = module->astTypePacks.find(argExpr))
                 {
-                    args.head.push_back(argExprType);
+                    auto [lastArgHead, lastArgTail] = flatten(*lastArgPack);
+                    args.head.insert(args.head.end(), lastArgHead.begin(), lastArgHead.end());
+                    args.tail = lastArgTail;
                     continue;
                 }
+            }
+
+            TypeId argExprType = lookupType(argExpr);
+            argExprs.push_back(argExpr);
+            if (idx + selfOffset >= paramsHead.size() || isErrorSuppressing(argExpr->location, argExprType))
+                args.head.push_back(argExprType);
+            else
+            {
                 testLiteralOrAstTypeIsSubtype(argExpr, paramsHead[idx + selfOffset]);
                 args.head.push_back(paramsHead[idx + selfOffset]);
             }
-
-            auto lastExpr = call->args.data[call->args.size - 1];
-            argExprs.push_back(lastExpr);
-
-            if (auto argTail = module->astTypePacks.find(lastExpr))
-            {
-                auto [lastExprHead, lastExprTail] = flatten(*argTail);
-                args.head.insert(args.head.end(), lastExprHead.begin(), lastExprHead.end());
-                args.tail = lastExprTail;
-            }
-            else if (paramsHead.size() >= call->args.size + selfOffset)
-            {
-                auto lastType = paramsHead[call->args.size - 1 + selfOffset];
-                auto lastExprType = lookupType(lastExpr);
-                if (isErrorSuppressing(lastExpr->location, lastExprType))
-                {
-                    args.head.push_back(lastExprType);
-                }
-                else
-                {
-                    testLiteralOrAstTypeIsSubtype(lastExpr, lastType);
-                    args.head.push_back(lastType);
-                }
-            }
-            else
-                args.tail = builtinTypes->anyTypePack;
         }
     }
     else
@@ -2094,25 +2055,15 @@ void TypeChecker2::visit(AstExprFunction* fn)
     }
     else if (!normalizedFnTy->hasFunctions())
     {
-        if (FFlag::LuauIceLess)
-        {
-            reportError(InternalError{"Internal error: Lambda has non-function type " + toString(inferredFnTy)}, fn->location);
-            return;
-        }
-        else
-            ice->ice("Internal error: Lambda has non-function type " + toString(inferredFnTy), fn->location);
+        reportError(InternalError{"Internal error: Lambda has non-function type " + toString(inferredFnTy)}, fn->location);
+        return;
     }
     else
     {
         if (1 != normalizedFnTy->functions.parts.size())
         {
-            if (FFlag::LuauIceLess)
-            {
-                reportError(InternalError{"Unexpected: Lambda has unexpected type " + toString(inferredFnTy)}, fn->location);
-                return;
-            }
-            else
-                ice->ice("Unexpected: Lambda has unexpected type " + toString(inferredFnTy), fn->location);
+            reportError(InternalError{"Unexpected: Lambda has unexpected type " + toString(inferredFnTy)}, fn->location);
+            return;
         }
 
         const FunctionType* inferredFtv = get<FunctionType>(normalizedFnTy->functions.parts.front());
@@ -2782,13 +2733,11 @@ TypeId TypeChecker2::flattenPack(TypePackId pack)
         return builtinTypes->errorType;
     else if (finite(pack) && size(pack) == 0)
         return builtinTypes->nilType; // `(f())` where `f()` returns no values is coerced into `nil`
-    else if (FFlag::LuauIceLess)
+    else
     {
         reportError(InternalError{"flattenPack got a weird pack!"}, Location{});
         return builtinTypes->errorType; // todo test this
     }
-    else
-        ice->ice("flattenPack got a weird pack!");
 }
 
 void TypeChecker2::visitGenerics(AstArray<AstGenericType*> generics, AstArray<AstGenericTypePack*> genericPacks)
@@ -3085,13 +3034,8 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
 
         if (!optSubLeaf || !optSuperLeaf)
         {
-            if (FFlag::LuauIceLess)
-            {
-                reportError(InternalError{"Subtyping test returned a reasoning with an invalid path"}, location);
-                return {}; // TODO test this
-            }
-            else
-                ice->ice("Subtyping test returned a reasoning with an invalid path", location);
+            reportError(InternalError{"Subtyping test returned a reasoning with an invalid path"}, location);
+            return {};
         }
 
         const TypeOrPack& subLeaf = *optSubLeaf;
@@ -3105,15 +3049,10 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
 
         if (!subLeafTy && !superLeafTy && !subLeafTp && !superLeafTp)
         {
-            if (FFlag::LuauIceLess)
-            {
-                reportError(
-                    InternalError{"Subtyping test returned a reasoning where one path ends at a type and the other ends at a pack."}, location
-                );
-                return {}; // TODO test this?
-            }
-            else
-                ice->ice("Subtyping test returned a reasoning where one path ends at a type and the other ends at a pack.", location);
+            reportError(
+                InternalError{"Subtyping test returned a reasoning where one path ends at a type and the other ends at a pack."}, location
+            );
+            return {};
         }
 
         std::string relation = "a subtype of";
@@ -3180,15 +3119,20 @@ Reasonings TypeChecker2::explainReasonings(TypePackId subTp, TypePackId superTp,
 
 void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location, const SubtypingResult& result)
 {
-    switch (shouldSuppressErrors(NotNull{&normalizer}, subTy).orElse(shouldSuppressErrors(NotNull{&normalizer}, superTy)))
-    {
-    case ErrorSuppression::Suppress:
+    if (FFlag::LuauMorePreciseErrorSuppression && result.isErrorSuppressing)
         return;
-    case ErrorSuppression::NormalizationFailed:
-        reportError(NormalizationTooComplex{}, location);
-        break;
-    case ErrorSuppression::DoNotSuppress:
-        break;
+    else
+    {
+        switch (shouldSuppressErrors(NotNull{&normalizer}, subTy).orElse(shouldSuppressErrors(NotNull{&normalizer}, superTy)))
+        {
+        case ErrorSuppression::Suppress:
+            return;
+        case ErrorSuppression::NormalizationFailed:
+            reportError(NormalizationTooComplex{}, location);
+            break;
+        case ErrorSuppression::DoNotSuppress:
+            break;
+        }
     }
 
     Reasonings reasonings = explainReasonings(subTy, superTy, location, result);
@@ -3199,15 +3143,20 @@ void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location,
 
 void TypeChecker2::explainError(TypePackId subTy, TypePackId superTy, Location location, const SubtypingResult& result)
 {
-    switch (shouldSuppressErrors(NotNull{&normalizer}, subTy).orElse(shouldSuppressErrors(NotNull{&normalizer}, superTy)))
-    {
-    case ErrorSuppression::Suppress:
+    if (FFlag::LuauMorePreciseErrorSuppression && result.isErrorSuppressing)
         return;
-    case ErrorSuppression::NormalizationFailed:
-        reportError(NormalizationTooComplex{}, location);
-        break;
-    case ErrorSuppression::DoNotSuppress:
-        break;
+    else
+    {
+        switch (shouldSuppressErrors(NotNull{&normalizer}, subTy).orElse(shouldSuppressErrors(NotNull{&normalizer}, superTy)))
+        {
+        case ErrorSuppression::Suppress:
+            return;
+        case ErrorSuppression::NormalizationFailed:
+            reportError(NormalizationTooComplex{}, location);
+            break;
+        case ErrorSuppression::DoNotSuppress:
+            break;
+        }
     }
 
     Reasonings reasonings = explainReasonings(subTy, superTy, location, result);
@@ -3385,11 +3334,23 @@ bool TypeChecker2::testIsSubtype(TypeId subTy, TypeId superTy, Location location
     NotNull<Scope> scope{findInnermostScope(location)};
     SubtypingResult r = subtyping->isSubtype(subTy, superTy, scope);
 
-    if (!isErrorSuppressing(location, subTy))
+    if (FFlag::LuauMorePreciseErrorSuppression)
     {
+        if (r.isErrorSuppressing)
+            return r.isSubtype;
+
         for (auto& e : r.errors)
             e.location = location;
     }
+    else
+    {
+        if (!isErrorSuppressing(location, subTy))
+        {
+            for (auto& e : r.errors)
+                e.location = location;
+        }
+    }
+
     reportErrors(std::move(r.errors));
     if (r.normalizationTooComplex)
         reportError(NormalizationTooComplex{}, location);

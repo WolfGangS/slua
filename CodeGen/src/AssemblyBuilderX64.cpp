@@ -867,6 +867,11 @@ void AssemblyBuilderX64::vcvtsi2sd(OperandX64 dst, OperandX64 src1, OperandX64 s
     placeAvx("vcvtsi2sd", dst, src1, src2, 0x2a, (src2.cat == CategoryX64::reg ? src2.base.size : src2.memSize) == SizeX64::qword, AVX_0F, AVX_F2);
 }
 
+void AssemblyBuilderX64::vcvtsi2ss(OperandX64 dst, OperandX64 src1, OperandX64 src2)
+{
+    placeAvx("vcvtsi2ss", dst, src1, src2, 0x2a, (src2.cat == CategoryX64::reg ? src2.base.size : src2.memSize) == SizeX64::qword, AVX_0F, AVX_F3);
+}
+
 void AssemblyBuilderX64::vcvtsd2ss(OperandX64 dst, OperandX64 src1, OperandX64 src2)
 {
     if (src2.cat == CategoryX64::reg)
@@ -991,6 +996,11 @@ void AssemblyBuilderX64::vmovq(OperandX64 dst, OperandX64 src)
     }
 }
 
+void AssemblyBuilderX64::vmaxps(OperandX64 dst, OperandX64 src1, OperandX64 src2)
+{
+    placeAvx("vmaxps", dst, src1, src2, 0x5f, false, AVX_0F, AVX_NP);
+}
+
 void AssemblyBuilderX64::vmaxsd(OperandX64 dst, OperandX64 src1, OperandX64 src2)
 {
     placeAvx("vmaxsd", dst, src1, src2, 0x5f, false, AVX_0F, AVX_F2);
@@ -999,6 +1009,11 @@ void AssemblyBuilderX64::vmaxsd(OperandX64 dst, OperandX64 src1, OperandX64 src2
 void AssemblyBuilderX64::vmaxss(OperandX64 dst, OperandX64 src1, OperandX64 src2)
 {
     placeAvx("vmaxss", dst, src1, src2, 0x5f, false, AVX_0F, AVX_F3);
+}
+
+void AssemblyBuilderX64::vminps(OperandX64 dst, OperandX64 src1, OperandX64 src2)
+{
+    placeAvx("vminps", dst, src1, src2, 0x5d, false, AVX_0F, AVX_NP);
 }
 
 void AssemblyBuilderX64::vminsd(OperandX64 dst, OperandX64 src1, OperandX64 src2)

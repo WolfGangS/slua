@@ -57,14 +57,6 @@ struct InConditionalContext
 
 using ScopePtr = std::shared_ptr<struct Scope>;
 
-std::optional<Property> findTableProperty(
-    NotNull<BuiltinTypes> builtinTypes,
-    ErrorVec& errors,
-    TypeId ty,
-    const std::string& name,
-    Location location
-);
-
 std::optional<TypeId> findMetatableEntry(
     NotNull<BuiltinTypes> builtinTypes,
     ErrorVec& errors,
@@ -398,6 +390,8 @@ struct ContainsAnyGeneric final : public TypeOnceVisitor
     bool visit(TypeId ty) override;
     bool visit(TypePackId ty) override;
 
+    bool visit(TypeId ty, const ExternType&) override;
+
     /**
      * @returns if there is _any_ generic in `ty`
      */
@@ -410,5 +404,12 @@ struct ContainsAnyGeneric final : public TypeOnceVisitor
  */
 bool containsGeneric(TypeId ty, NotNull<DenseHashSet<const void*>> generics);
 bool containsGeneric(TypePackId ty, NotNull<DenseHashSet<const void*>> generics);
+
+/**
+ * @return Whether `ty` is a type that cannot be unified with another type,
+ *         such as a blocked type, pending expansion type, or an unsolved
+ *         type function.
+ */
+bool isBlocked(TypeId ty);
 
 } // namespace Luau

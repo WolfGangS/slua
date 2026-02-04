@@ -43,7 +43,9 @@ LUAU_FASTFLAG(LuauCompileMathIsNanInfFinite)
 LUAU_FASTFLAG(LuauTypeCheckerMathIsNanInfFinite)
 LUAU_FASTFLAG(LuauCodegenChainedSpills)
 LUAU_FASTFLAG(LuauCodegenSpillRestoreFreeTemp)
+LUAU_FASTFLAG(LuauCodegenExtraSimd)
 LUAU_FASTFLAG(LuauCodegenDwordSpillSlots)
+LUAU_FASTFLAG(LuauCodegenExtraSpills)
 
 static lua_CompileOptions defaultOptions()
 {
@@ -1799,6 +1801,10 @@ TEST_CASE("Vector")
 
 TEST_CASE("VectorLibrary")
 {
+    ScopedFastFlag luauCodegenExtraSimd{FFlag::LuauCodegenExtraSimd, true};
+    ScopedFastFlag luauCodegenSplitFloat{FFlag::LuauCodegenSplitFloat, true};
+    ScopedFastFlag luauCodegenFloatOps{FFlag::LuauCodegenFloatOps, true};
+
     lua_CompileOptions copts = defaultOptions();
 
     SUBCASE("O0")
@@ -2504,8 +2510,25 @@ TEST_CASE("ApiIter")
     }
     CHECK(sum2 == 580);
 
-    // pop table
-    lua_pop(L, 1);
+    // check lua_rawiter compatibility with C stack limit
+    lua_settop(L, 18);
+    lua_pushvalue(L, 1);
+
+    CHECK(lua_gettop(L) == 19);
+    CHECK(lua_checkstack(L, 2));
+
+    // Luau iteration interface: lua_rawiter (faster and preferable to lua_next)
+    double sum3 = 0;
+    for (int index = 0; index = lua_rawiter(L, -1, index), index >= 0;)
+    {
+        sum3 += lua_tonumber(L, -2); // key
+        sum3 += lua_tonumber(L, -1); // value
+        lua_pop(L, 2);               // pop both key and value
+    }
+    CHECK(sum3 == 580);
+
+    // pop everything
+    lua_pop(L, 19);
 }
 
 static int cpcallTest(lua_State* L)
@@ -4071,6 +4094,9 @@ TEST_CASE("SafeEnv")
 TEST_CASE("Native")
 {
     ScopedFastFlag luauCodegenSpillRestoreFreeTemp{FFlag::LuauCodegenSpillRestoreFreeTemp, true};
+    ScopedFastFlag luauCodegenChainedSpills{FFlag::LuauCodegenChainedSpills, true};
+    ScopedFastFlag luauCodegenDwordSpillSlots{FFlag::LuauCodegenDwordSpillSlots, true};
+    ScopedFastFlag luauCodegenExtraSpills{FFlag::LuauCodegenExtraSpills, true};
 
     // This tests requires code to run natively, otherwise all 'is_native' checks will fail
     if (!codegen || !luau_codegen_supported())
