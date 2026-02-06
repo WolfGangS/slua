@@ -1202,7 +1202,10 @@ static int json_append_data(lua_State *l, json_config_t *cfg,
         }
         break;
     case LUA_TNIL:
-        strbuf_append_mem(json, "null", 4);
+        if (cfg->sl_tagged_types)
+            strbuf_append_string(json, "\"!0\"");
+        else
+            strbuf_append_mem(json, "null", 4);
         break;
     case LUA_TLIGHTUSERDATA: {
         if (void* json_internal_val = lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL))
@@ -1602,6 +1605,11 @@ static bool json_parse_tagged_string(lua_State *l, const char *str, size_t len)
             }
         }
         lua_newbuffer(l, 0);
+        return true;
+    }
+    case '0':
+    {
+        lua_pushnil(l);
         return true;
     }
 
