@@ -10,7 +10,7 @@
 #include "Luau/LSLBuiltins.h"
 #include "Luau/Parser.h"
 #include "Luau/TimeTrace.h"
-
+#include "Luau/Counters.h"
 #include "Luau/Coverage.h"
 #include "Luau/FileUtils.h"
 #include "Luau/Flags.h"
@@ -50,7 +50,7 @@
 #include <signal.h>
 
 LUAU_FASTFLAG(DebugLuauTimeTracing)
-
+LUAU_FASTFLAG(LuauCodegenCounterSupport)
 
 constexpr int MaxTraversalLimit = 50;
 
@@ -230,6 +230,8 @@ void* createCliRequireContext(lua_State* L)
             return codegen;
         },
         coverageTrack,
+        countersActive,
+        countersTrack
     };
 
     // Store ReplRequirer in the registry to keep it alive for the lifetime of
@@ -710,11 +712,18 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
         if (codegen)
         {
             Luau::CodeGen::CompilationOptions nativeOptions;
+
+            if (countersActive())
+                nativeOptions.recordCounters = true;
+
             Luau::CodeGen::compile(L, -1, nativeOptions);
         }
 
         if (coverageActive())
             coverageTrack(L, -1);
+
+        if (countersActive())
+            countersTrack(L, -1);
 
         setupArguments(L, program_argc, program_argv);
         status = lua_resume(L, NULL, program_argc);
@@ -766,6 +775,7 @@ static void displayHelp(const char* argv0)
     printf("\n");
     printf("Available options:\n");
     printf("  --coverage: collect code coverage while running the code and output results to coverage.out\n");
+    printf("  --counters: collect native counters data while running the code and output results to callgrind.out\n");
     printf("  -h, --help: Display this usage message.\n");
     printf("  -i, --interactive: Run an interactive REPL after executing the last script specified.\n");
     printf("  -O<n>: compile with optimization level n (default 1, n should be between 0 and 2).\n");
@@ -796,6 +806,7 @@ int replMain(int argc, char** argv)
     bool coverage = false;
     bool interactive = false;
     bool codegenPerf = false;
+    bool counters = false;
     int program_args = argc;
 
     for (int i = 1; i < argc; i++)
@@ -849,6 +860,11 @@ int replMain(int argc, char** argv)
         else if (strcmp(argv[i], "--coverage") == 0)
         {
             coverage = true;
+        }
+        else if (strcmp(argv[i], "--counters") == 0)
+        {
+            counters = true;
+            FFlag::LuauCodegenCounterSupport.value = true;
         }
         else if (strcmp(argv[i], "--timetrace") == 0)
         {
@@ -951,6 +967,9 @@ int replMain(int argc, char** argv)
         if (coverage)
             coverageInit(L);
 
+        if (counters)
+            countersInit(L);
+
         int failed = 0;
 
         for (size_t i = 0; i < files.size(); ++i)
@@ -967,6 +986,9 @@ int replMain(int argc, char** argv)
 
         if (coverage)
             coverageDump("coverage.out");
+
+        if (counters)
+            countersDump("callgrind.out");
 
         return failed ? 1 : 0;
     }
