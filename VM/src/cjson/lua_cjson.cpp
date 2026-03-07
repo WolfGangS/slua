@@ -1627,9 +1627,14 @@ static bool json_parse_tagged_string(lua_State *l, const char *str, size_t len)
                 luaL_error(l, "malformed base64 UUID: %s", str);
 
             luaSL_pushuuidbytes(l, uuid_bytes);
+        } else if (payload_len == 36) {
+            // Normal format: UUID string (e.g. "12345678-1234-1234-1234-123456789abc")
+            uint8_t uuid_bytes[16];
+            if (!parse_uuid_to_bytes(payload, payload_len, uuid_bytes))
+                luaL_error(l, "malformed tagged UUID: %s", str);
+            luaSL_pushuuidbytes(l, uuid_bytes);
         } else {
-            // Normal format: UUID string
-            luaSL_pushuuidlstring(l, payload, payload_len);
+            luaL_error(l, "malformed tagged UUID: %s", str);
         }
         return true;
 

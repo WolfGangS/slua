@@ -144,6 +144,15 @@ assert(lljson.sldecode('"!v<1,2,3>"') == vector(1, 2, 3))
 assert(lljson.sldecode('"!q<1,2,3,4>"') == quaternion(1, 2, 3, 4))
 assert(lljson.sldecode('"!u12345678-1234-1234-1234-123456789abc"') == uuid("12345678-1234-1234-1234-123456789abc"))
 
+-- Invalid tagged UUIDs must error
+assert(not pcall(lljson.sldecode, '"!uOops"'))
+assert(not pcall(lljson.sldecode, '"!u1234"'))
+-- long enough, but invalid.
+assert(not pcall(lljson.sldecode, '"!u00000000-0000-0000-0000-00000000000g"'))
+-- uppercase accepted, it'll be canonicalized
+local uppercase_uuid_str = '00000000-0000-0000-0000-00000000000A'
+assert(lljson.sldecode(`"!u{uppercase_uuid_str}"`) == uuid(uppercase_uuid_str))
+
 -- Escaped ! strings decode correctly
 assert(lljson.sldecode('"!!dangerous"') == "!dangerous")
 assert(lljson.sldecode('"!!"') == "!")
