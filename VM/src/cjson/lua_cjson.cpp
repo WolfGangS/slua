@@ -59,6 +59,7 @@ typedef lua_YieldSafeStrBuf strbuf_t;
 #include "../apr/apr_base64.h"
 #include "../lgc.h"
 #include "../lapi.h"
+#include "../lstate.h"
 #include "../ltable.h"
 // ServerLua: yieldable infrastructure for encode/decode
 #include "lyieldablemacros.h"
@@ -2363,9 +2364,20 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
         if (json_len > DEFAULT_MAX_SIZE)
             luaL_errorL(l, "JSON too large to decode");
 
-        /* Create tmp strbuf, insert at pos 2, input string moves to pos 3 */
-        luaYB_push(l);
+        // ServerLua: Create decode scratch buffer in memcat 1 — it's an
+        // internal intermediary, not user-visible output. Pre-size to
+        // json_len so _unsafe appends can't overflow (decoded <= input).
+        // This is only safe because JSON escapes can never produce output
+        // larger than the escape sequence.
+        {
+            // Normally we would use memcat 0 for things that aren't to be "charged"
+            // against the user's memory usage, but use 1 so we can distinguish it
+            // from more mundane VM-internal allocations.
+            [[maybe_unused]] MemcatGuard mcg(l, 1);
+            luaYB_push(l);
+        }
         lua_insert(l, 2);
+        strbuf_ensure_empty_length(json_get_strbuf(l), json_len);
         /* Stack: [opaque(1), strbuf(2), input_string(3)] */
 
         lua_hardenstack(l, 1);
