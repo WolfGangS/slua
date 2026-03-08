@@ -213,10 +213,33 @@ static int ll_list2float(lua_State *L)
     return 1;
 }
 
+static constexpr uint8_t NULL_KEY_BYTES[16] = {0};
+
+// Push the error key for the particular VM type we're using.
+// Blank string for LSL, null UUID for Lua.
+static void push_error_key(lua_State *L)
+{
+    if (LUAU_IS_LSL_VM(L))
+        luaSL_pushuuidstring(L, "");
+    else
+        luaSL_pushuuidbytes(L, NULL_KEY_BYTES);
+}
+
 static int ll_list2key(lua_State *L)
 {
     if (!_list_accessor_helper(L, LSLIType::LST_KEY))
-        luaSL_pushuuidstring(L, "");
+    {
+        push_error_key(L);
+        return 1;
+    }
+    // In SLua mode, reject uncompressed (invalid) UUIDs and return NULL_KEY
+    if (!LUAU_IS_LSL_VM(L))
+    {
+        bool compressed;
+        luaSL_checkuuid(L, -1, &compressed);
+        if (!compressed)
+            push_error_key(L);
+    }
     return 1;
 }
 

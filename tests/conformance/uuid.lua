@@ -28,4 +28,11 @@ assert(touuid('foo') == nil)
 -- But the blank string is special-cased to mean `NULL_KEY`
 assert(uuid('') == uuid('00000000-0000-0000-0000-000000000000'))
 
+-- Invalid UUID in list cast should return NULL_KEY, not an uncompressed UUID
+local null_key = uuid('00000000-0000-0000-0000-000000000000')
+assert(ll.List2Key({"not-a-uuid"}, 1) == null_key)
+assert(ll.List2Key({""}, 1) == null_key)
+-- Valid UUID in list cast should work
+assert(ll.List2Key({expected_str}, 1) == expected_key)
+
 return "OK"
