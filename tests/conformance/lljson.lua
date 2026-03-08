@@ -368,7 +368,10 @@ local recurse = {
 }
 recurse.b = recurse
 -- Should fail due to limits
-assert(not pcall(function() lljson.encode(recurse) end))
+assert(not pcall(lljson.encode, recurse))
+
+-- Non-string input should error, not crash
+assert(not pcall(lljson.decode, {"1,2,3"}))
 
 -- Enable interrupt-driven yields for remaining tests.
 enable_check_interrupt()

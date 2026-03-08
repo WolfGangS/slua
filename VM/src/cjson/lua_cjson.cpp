@@ -2409,6 +2409,7 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
 static int json_decode_v0(lua_State* l)
 {
     luaL_argcheck(l, lua_gettop(l) == 1, 1, "expected 1 argument");
+    luaL_checkstring(l, 1);
     return json_decode_common(l, true, false);
 }
 static int json_decode_v0_k(lua_State* l, int)
@@ -2419,6 +2420,7 @@ static int json_decode_v0_k(lua_State* l, int)
 static int json_decode_sl_v0(lua_State* l)
 {
     luaL_argcheck(l, lua_gettop(l) == 1, 1, "expected 1 argument");
+    luaL_checkstring(l, 1);
     return json_decode_common(l, true, true);
 }
 static int json_decode_sl_v0_k(lua_State* l, int)
