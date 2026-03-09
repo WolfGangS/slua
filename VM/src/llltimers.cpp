@@ -297,14 +297,14 @@ static bool is_timer_wrapper_registered(lua_State *L, lua_LLTimers *lltimers)
 {
     int top = lua_gettop(L);
 
-    // Get LLEvents userdata and its listeners table
-    // We can't use `:listeners()` because we lie about the closure identity
+    // Get LLEvents userdata and its handlers table
+    // We can't use `:handlers()` because we lie about the closure identity
     // of our tick wrapper so users can't accidentally unregister it :)
     lua_getref(L, lltimers->llevents_ref);
     auto *llevents = (lua_LLEvents *)lua_touserdata(L, -1);
-    lua_getref(L, llevents->listeners_tab_ref);
+    lua_getref(L, llevents->handlers_tab_ref);
 
-    // Get "timer" listeners array
+    // Get "timer" handlers array
     lua_rawgetfield(L, -1, "timer");
     if (lua_isnil(L, -1))
     {

@@ -59,9 +59,9 @@ struct LuaTable;
 typedef struct lua_LLEvents {
     // to be used with lua_ref(), be sure to un-pin appropriately on destruction.
     // should be a reference to a table of `event_name_str -> {table of handler closures}`
-    int listeners_tab_ref;
+    int handlers_tab_ref;
     // Having an actual pointer is valuable for quick traversal.
-    LuaTable * listeners_tab;
+    LuaTable * handlers_tab;
 } lua_LLEvents;
 
 typedef struct lua_LLTimers {

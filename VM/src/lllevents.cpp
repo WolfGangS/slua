@@ -178,10 +178,10 @@ void luaSL_setup_detectedevent_metatable(lua_State *L)
 static void llevents_dtor(lua_State *L, void *data)
 {
     lua_LLEvents *llevents = (lua_LLEvents *)data;
-    if (llevents->listeners_tab_ref != -1)
+    if (llevents->handlers_tab_ref != -1)
     {
-        lua_unref(L, llevents->listeners_tab_ref);
-        llevents->listeners_tab_ref = -1;
+        lua_unref(L, llevents->handlers_tab_ref);
+        llevents->handlers_tab_ref = -1;
     }
 }
 
@@ -189,12 +189,12 @@ int luaSL_createeventmanager(lua_State *L)
 {
     lua_checkstack(L, 2);
     auto *llevents = (lua_LLEvents *)lua_newuserdatataggedwithmetatable(L, sizeof(lua_LLEvents), UTAG_LLEVENTS);
-    llevents->listeners_tab_ref = -1;  // Initialize before allocations
+    llevents->handlers_tab_ref = -1;  // Initialize before allocations
 
-    // Create empty listeners table
+    // Create empty handlers table
     lua_createtable(L, 0, 0);
-    llevents->listeners_tab_ref = lua_ref(L, -1);
-    llevents->listeners_tab = hvalue(luaA_toobject(L, -1));
+    llevents->handlers_tab_ref = lua_ref(L, -1);
+    llevents->handlers_tab = hvalue(luaA_toobject(L, -1));
     // event name -> {event handler functions}
     lua_pop(L, 1);
 
@@ -252,8 +252,8 @@ static int llevents_on(lua_State *L)
         luaL_typeerror(L, 3, "function or callable table");
     lua_settop(L, 3);
 
-    // Get the listeners table
-    lua_getref(L, llevents->listeners_tab_ref);
+    // Get the handlers table
+    lua_getref(L, llevents->handlers_tab_ref);
 
     // Get or create the handlers array for this event
     lua_rawgetfield(L, -1, event_name);
@@ -305,8 +305,8 @@ static int llevents_off(lua_State *L)
     lua_settop(L, 3);
 
 
-    // Get the listeners table
-    lua_getref(L, llevents->listeners_tab_ref);
+    // Get the handlers table
+    lua_getref(L, llevents->handlers_tab_ref);
     lua_rawgetfield(L, -1, event_name);
 
     if (lua_isnil(L, -1))
@@ -444,7 +444,7 @@ static int llevents_once(lua_State *L)
     return 1;
 }
 
-static int llevents_listeners(lua_State *L)
+static int llevents_handlers(lua_State *L)
 {
     auto *llevents = (const lua_LLEvents *)lua_touserdatatagged(L, 1, UTAG_LLEVENTS);
     if (!llevents)
@@ -453,8 +453,8 @@ static int llevents_listeners(lua_State *L)
     const char *event_name = luaL_checkstring(L, 2);
     lua_settop(L, 2);
 
-    // Get the listeners table
-    lua_getref(L, llevents->listeners_tab_ref);
+    // Get the handlers table
+    lua_getref(L, llevents->handlers_tab_ref);
     lua_rawgetfield(L, -1, event_name);
 
     if (lua_isnil(L, -1))
@@ -501,8 +501,8 @@ static int llevents_eventnames(lua_State *L)
 
     lua_settop(L, 1);
 
-    // Get the listeners table
-    lua_getref(L, llevents->listeners_tab_ref);
+    // Get the handlers table
+    lua_getref(L, llevents->handlers_tab_ref);
 
     lua_createtable(L, 0, 0);
     int index = 1;
@@ -578,10 +578,10 @@ DEFINE_YIELDABLE(llevents_handle_event, 0)
         is_multi = is_multi_event(event_name);
         bool can_adjust_damage = is_multi && (strcmp(event_name, "on_damage") == 0);
 
-        lua_getref(L, llevents->listeners_tab_ref);
+        lua_getref(L, llevents->handlers_tab_ref);
         lua_rawgetfield(L, -1, event_name);
 
-        // We have no listeners for this event.
+        // We have no handlers for this event.
         if (lua_isnil(L, -1))
             return 0;
 
@@ -596,7 +596,7 @@ DEFINE_YIELDABLE(llevents_handle_event, 0)
         // Clone from its new home, place at position 2 (replacing llevents arg)
         lua_clonetable(L, ORIGINAL_HANDLERS_TABLE);
         lua_replace(L, HANDLERS_TABLE);
-        // Pop leftover listeners_tab
+        // Pop leftover handlers_tab
         lua_pop(L, 1);
 
         if (is_multi)
@@ -731,8 +731,8 @@ void luaSL_setup_llevents_metatable(lua_State *L, int expose_internal_funcs)
     lua_pushcfunction(L, llevents_once, "once");
     lua_setfield(L, -2, "once");
 
-    lua_pushcfunction(L, llevents_listeners, "listeners");
-    lua_setfield(L, -2, "listeners");
+    lua_pushcfunction(L, llevents_handlers, "handlers");
+    lua_setfield(L, -2, "handlers");
 
     lua_pushcfunction(L, llevents_eventnames, "eventNames");
     lua_setfield(L, -2, "eventNames");
@@ -741,7 +741,7 @@ void luaSL_setup_llevents_metatable(lua_State *L, int expose_internal_funcs)
     lua_pushcclosurek(L, llevents_handle_event_v0, "_handleEvent", 0, llevents_handle_event_v0_k);
     lua_setfield(L, LUA_REGISTRYINDEX, LLEVENTS_HANDLEEVENT_KEY);
 
-    // Store timer wrapper guard in registry for listeners() protection
+    // Store timer wrapper guard in registry for handlers() protection
     lua_pushcfunction(L, timer_wrapper_guard, "timer_wrapper_guard");
     lua_setfield(L, LUA_REGISTRYINDEX, LLEVENTS_TIMER_WRAPPER_GUARD_KEY);
 

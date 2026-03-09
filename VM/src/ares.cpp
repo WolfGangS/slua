@@ -1346,7 +1346,7 @@ static void p_userdata(Info *info) {                               /* ... udata 
     case UTAG_LLEVENTS:
     {
         const auto *llevents = (lua_LLEvents*)value;
-        lua_getref(info->L, llevents->listeners_tab_ref);
+        lua_getref(info->L, llevents->handlers_tab_ref);
                                                         /* ... udata handlers */
         persist(info);
         lua_pop(info->L, 1);                                     /* ... udata */
@@ -1458,17 +1458,17 @@ static void u_userdata(Info *info) {                                   /* ... */
               UTAG_LLEVENTS
           );
                                                               /* ... llevents */
-          llevents->listeners_tab_ref = -1;
-          llevents->listeners_tab = nullptr;
+          llevents->handlers_tab_ref = -1;
+          llevents->handlers_tab = nullptr;
 
-          // Register immediately to handle cycles (listeners_tab may reference this)
+          // Register immediately to handle cycles (handlers_tab may reference this)
           registerobject(info);
 
-          // Unpersist listeners_tab and store ref IMMEDIATELY to prevent leaks
+          // Unpersist handlers_tab and store ref IMMEDIATELY to prevent leaks
           unpersist(info);                           /* ... llevents handlers_tab */
           eris_checktype(info, -1, LUA_TTABLE);
-          llevents->listeners_tab_ref = lua_ref(info->L, -1);
-          llevents->listeners_tab = hvalue(luaA_toobject(info->L, -1));
+          llevents->handlers_tab_ref = lua_ref(info->L, -1);
+          llevents->handlers_tab = hvalue(luaA_toobject(info->L, -1));
           lua_pop(info->L, 1);                                    /* ... llevents */
 
           break;

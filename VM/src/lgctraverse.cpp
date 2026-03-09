@@ -114,7 +114,7 @@ static void traverseudata(ReachableContext* ctx, Udata* u)
     switch(u->tag)
     {
         case UTAG_LLEVENTS:
-            enqueueobj(ctx, obj2gco(((lua_LLEvents*)&u->data)->listeners_tab));
+            enqueueobj(ctx, obj2gco(((lua_LLEvents*)&u->data)->handlers_tab));
             break;
         case UTAG_LLTIMERS:
             enqueueobj(ctx, obj2gco(((lua_LLTimers*)&u->data)->timers_tab));
