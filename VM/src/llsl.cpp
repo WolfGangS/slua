@@ -1029,11 +1029,12 @@ static int lsl_tostring_quat(lua_State *L)
     if (a == nullptr)
         luaL_typeerror(L, 1, "quaternion");
 
-    char buf[128] = {};
+    char buf[256] = {};
     char* p = buf;
     *p++ = '<';
 
-    const char* format = LUAU_IS_LSL_VM(L) ? "%5.5f" : "%.6g";
+    bool is_lsl = LUAU_IS_LSL_VM(L);
+    const char* format = is_lsl ? "%5.5f" : "%.6f";
     for (int i = 0; i < 4; i++)
     {
         if (i > 0)
@@ -1041,7 +1042,10 @@ static int lsl_tostring_quat(lua_State *L)
             *p++ = ',';
             *p++ = ' ';
         }
-        p += luai_formatfloat(p, buf + sizeof(buf) - p, format, a[i]);
+        int n = luai_formatfloat(p, buf + sizeof(buf) - p, format, a[i]);
+        if (!is_lsl)
+            n = luai_trimfloat(p, n);
+        p += n;
     }
 
     *p++ = '>';

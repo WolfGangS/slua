@@ -863,9 +863,10 @@ static void json_append_number(lua_State *l, json_config_t *cfg,
 static void json_append_coordinate_component(lua_State *l, strbuf_t *json, float val, bool tight = false) {
     if (tight && val == 0.0f)
         return;  // Omit zeros in tight mode
-    char format_buf[64] = {};
+    char format_buf[256] = {};
     // Use shared helper to ensure consistent normalization of non-finite values
-    size_t str_len = luai_formatfloat(format_buf, sizeof(format_buf), "%.6g", val);
+    size_t str_len = luai_formatfloat(format_buf, sizeof(format_buf), "%.6f", val);
+    str_len = luai_trimfloat(format_buf, str_len);
     strbuf_append_mem(json, format_buf, str_len);
 }
 

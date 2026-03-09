@@ -370,10 +370,30 @@ char* luai_num2str(char* buf, double n)
     }
 }
 
+// ServerLua: Strip trailing zeros and bare decimal point from formatted float
+int luai_trimfloat(char* buf, int len)
+{
+    if (len <= 0)
+        return len;
+
+    // If there is a decimal within buf and buf + len
+    if (memchr(buf, '.', len))
+    {
+        // Trim trailing zeros
+        while (len > 0 && buf[len - 1] == '0')
+            len--;
+        // If we're left with nothing after the decimal then trim the decimal
+        if (len > 0 && buf[len - 1] == '.')
+            len--;
+    }
+    return len;
+}
+
 // ServerLua: Format a float with normalized non-finite values for LSL semantics
 int luai_formatfloat(char* buf, size_t bufsize, const char* format, float value)
 {
-    LUAU_ASSERT(bufsize >= 20);
+    // We need enough space to fit the max magnitude float with 6 decimals
+    LUAU_ASSERT(bufsize >= 60);
 
     if (isnan(value))
     {

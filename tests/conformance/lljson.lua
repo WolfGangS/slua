@@ -22,8 +22,8 @@ assert(lljson.encode({foo="bar"}) == '{"foo":"bar"}')
 assert(lljson.encode({foo=nil}) == '{}')
 -- But we can represent it explicitly with `lljson.null`
 assert(lljson.encode({foo=lljson.null}) == '{"foo":null}')
-assert(lljson.encode(vector(1, 2.5, 22.0 / 7.0)) == '"<1,2.5,3.14286>"')
-assert(lljson.encode(quaternion(1, 2.5, 22.0 / 7.0, 4)) == '"<1,2.5,3.14286,4>"')
+assert(lljson.encode(vector(1, 2.5, 22.0 / 7.0)) == '"<1,2.5,3.142857>"')
+assert(lljson.encode(quaternion(1, 2.5, 22.0 / 7.0, 4)) == '"<1,2.5,3.142857,4>"')
 
 -- metatables are totally ignored
 local SomeMT = {}

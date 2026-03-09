@@ -123,5 +123,6 @@ LUAI_FUNC char* luai_num2str(char* buf, double n);
 // This ensures consistent LSL semantics for vector/quaternion toString and JSON serialization.
 // Requires bufsize >= 20 and pre-zeroed buffer.
 LUAI_FUNC int luai_formatfloat(char* buf, size_t bufsize, const char* format, float value);
+LUAI_FUNC int luai_trimfloat(char* buf, int len);
 
 #define luai_str2num(s, p) strtod((s), (p))
