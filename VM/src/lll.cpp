@@ -577,8 +577,9 @@ static int ll_listreplacelist(lua_State *L)
     luaL_checktype(L, 1, LUA_TTABLE);
     luaL_checktype(L, 2, LUA_TTABLE);
     int orig_len = lua_objlen(L, 1);
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
     // Let llDeleteSubList handle the tricky part.
-    lua_pushboolean(L, true);
+    lua_pushboolean(L, compat_mode);
     lua_pushcclosurek(L, ll_deletesublist, "DeleteSubList", 1, nullptr);
     lua_pushvalue(L, 1);
     lua_pushvalue(L, 3);
@@ -592,8 +593,6 @@ static int ll_listreplacelist(lua_State *L)
 
     auto *src_h = hvalue(luaA_toobject(L, 2));
     int src_len = luaH_getn(src_h);
-
-    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
     int target = _checkobjectindex(L, orig_len, 3, compat_mode);
 
