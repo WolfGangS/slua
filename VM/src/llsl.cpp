@@ -94,9 +94,13 @@ int luaSL_pushquaternion(lua_State *L, double x, double y, double z, double s)
     return 1;
 }
 
+// LSL-mode "key" constructor, which optimizes for UUID-like keys,
+// but additionally allows arbitrary strings.
 static int lsl_key_ctor(lua_State *L)
 {
-    if (lua_type(L, 1) == LUA_TUSERDATA)
+    auto arg_type = lua_type(L, 1);
+    lua_settop(L, 1);
+    if (arg_type == LUA_TUSERDATA)
     {
         // If this is already a UUID just return the same UUID.
         bool compressed;
@@ -104,9 +108,11 @@ static int lsl_key_ctor(lua_State *L)
         lua_pushvalue(L, 1);
         return 1;
     }
-    lua_settop(L, 1);
-    if (lua_isnil(L, 1))
-        return 1;
+    if (arg_type != LUA_TSTRING)
+    {
+        luaL_error(L, "Failed to cast");
+        return 0;
+    }
     size_t len;
     const char *data = luaL_checklstring(L, 1, &len);
     return luaSL_pushuuidlstring(L, data, len);
@@ -120,8 +126,6 @@ static int lua_uuid_ctor(lua_State *L)
 {
     auto arg_type = lua_type(L, 1);
     lua_settop(L, 1);
-    if (arg_type == LUA_TNIL)
-        return 1;
     if (arg_type == LUA_TUSERDATA)
     {
         // If this is already a UUID just return the same UUID.
@@ -138,9 +142,14 @@ static int lua_uuid_ctor(lua_State *L)
             return push_uuid_common(L, (const char*)data, UUID_BYTES, true);
         luaL_errorL(L, "Buffer too short to be UUID, only %d bytes", (int)buf_len);
     }
+    else if (arg_type != LUA_TSTRING)
+    {
+        lua_pushnil(L);
+        return 1;
+    }
 
     size_t len;
-    const char *data = luaL_checklstring(L, 1, &len);
+    const char *data = lua_tolstring(L, 1, &len);
 
     // Empty string → NULL_KEY
     if (len == 0)
@@ -539,11 +548,11 @@ static int lsl_must_cast(lua_State *L)
     return 1;
 }
 
-static int lsl_must_cast_nil_default(lua_State *L)
+static int lsl_try_cast_nil_default(lua_State *L)
 {
     if (_lsl_cast_internal(L, false, true, true) != 1)
     {
-        luaL_errorL(L, "unable to cast!");
+        lua_pushnil(L);
     }
     return 1;
 }
@@ -1235,20 +1244,16 @@ static int lsl_to_vector(lua_State *L)
 {
     luaL_checkany(L, 1);
     lua_settop(L, 1);
-    if (lua_isnil(L, 1))
-        return 1;
     lua_pushunsigned(L, (unsigned int)LSLIType::LST_VECTOR);
-    return lsl_must_cast_nil_default(L);
+    return lsl_try_cast_nil_default(L);
 }
 
 static int lsl_to_quaternion(lua_State *L)
 {
     luaL_checkany(L, 1);
     lua_settop(L, 1);
-    if (lua_isnil(L, 1))
-        return 1;
     lua_pushunsigned(L, (unsigned int)LSLIType::LST_QUATERNION);
-    return lsl_must_cast_nil_default(L);
+    return lsl_try_cast_nil_default(L);
 }
 
 const char *luaSL_checkuuid(lua_State *L, int num_arg, bool *compressed)
@@ -1677,15 +1682,6 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
     int top = lua_gettop(L);
 
     // Load these into the global namespace
-
-    if (LUAU_IS_LSL_VM(L))
-    {
-        lua_pushcfunction(L, lsl_key_ctor, "uuid");
-        luau_dupcclosure(L, -1, "touuid");
-        lua_setglobal(L, "touuid");
-        lua_setglobal(L, "uuid");
-    }
-
     lua_pushcfunction(L, lsl_to_vector, "tovector");
     lua_setglobal(L, "tovector");
 
@@ -1745,7 +1741,14 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
     lua_pop(L, 1);
     LUAU_ASSERT(lua_gettop(L) == top);
 
-    if (!LUAU_IS_LSL_VM(L))
+    if (LUAU_IS_LSL_VM(L))
+    {
+        lua_pushcfunction(L, lsl_key_ctor, "uuid");
+        luau_dupcclosure(L, -1, "touuid");
+        lua_setglobal(L, "touuid");
+        lua_setglobal(L, "uuid");
+    }
+    else
     {
         // Create uuid module table
         luaopen_sl_uuid(L);
