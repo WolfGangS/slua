@@ -1476,34 +1476,52 @@ static inline float quaternion_dot(const float* a, const float* b) {
 constexpr float ONE_PART_IN_A_MILLION = 0.000001f;
 constexpr float FP_MAG_THRESHOLD = 0.0000001f;
 
-static int lua_quaternion_normalize(lua_State *L)
+// This logic largely copied from indra
+static inline void normalize_quaternion(const float* in, float* out)
 {
-    const float* quat = luaSL_checkquaternion(L, 1);
-    // This logic largely copied from indra
-    float mag = sqrtf(quaternion_dot(quat, quat));
+    float mag = sqrtf(quaternion_dot(in, in));
     if (mag > FP_MAG_THRESHOLD)
     {
         // Floating point error can prevent some quaternions from achieving
         // exact unity length.  When trying to renormalize such quaternions we
         // can oscillate between multiple quantized states. To prevent such
         // drifts we only renormalize if the length is far enough from unity.
-        if (fabs(1.f - mag) > ONE_PART_IN_A_MILLION)
+        if (fabsf(1.f - mag) > ONE_PART_IN_A_MILLION)
         {
             float oomag = 1.0f / mag;
-            luaSL_pushquaternion(L, quat[0] * oomag, quat[1] * oomag, quat[2] * oomag, quat[3] * oomag);
+            out[0] = in[0] * oomag;
+            out[1] = in[1] * oomag;
+            out[2] = in[2] * oomag;
+            out[3] = in[3] * oomag;
         }
         else
         {
-            // We don't normalize in this case in indra, so push the original input
-            lua_pushvalue(L, 1);
+            out[0] = in[0];
+            out[1] = in[1];
+            out[2] = in[2];
+            out[3] = in[3];
         }
     }
     else
     {
         // We were given a very bad quaternion so we set it to identity
-        luaSL_pushquaternion(L, 0, 0, 0, 1);
+        out[0] = 0.0f;
+        out[1] = 0.0f;
+        out[2] = 0.0f;
+        out[3] = 1.0f;
     }
+}
 
+static int lua_quaternion_normalize(lua_State *L)
+{
+    const float* quat = luaSL_checkquaternion(L, 1);
+    float res[4];
+    normalize_quaternion(quat, res);
+    // We don't normalize in this case in indra, so push the original input
+    if (res[0] == quat[0] && res[1] == quat[1] && res[2] == quat[2] && res[3] == quat[3])
+        lua_pushvalue(L, 1);
+    else
+        luaSL_pushquaternion(L, res[0], res[1], res[2], res[3]);
     return 1;
 }
 
@@ -1576,10 +1594,11 @@ static int lua_quaternion_conjugate(lua_State *L)
 
 static inline void push_rotated_vector(lua_State *L, const float* vec) {
     const float* quat = luaSL_checkquaternion(L, 1);
+    float nquat[4];
+    normalize_quaternion(quat, nquat);
     float res[3] = {0.0f};
-    rot_vec(vec, quat, res);
-    float invSqrt = 1.0f / sqrtf(res[0] * res[0] + res[1] * res[1] + res[2] * res[2]);
-    lua_pushvector(L, res[0] * invSqrt, res[1] * invSqrt, res[2] * invSqrt);
+    rot_vec(vec, nquat, res);
+    lua_pushvector(L, res[0], res[1], res[2]);
 }
 
 static int lua_quaternion_tofwd(lua_State *L)
