@@ -865,8 +865,8 @@ static int tshrink(lua_State* L)
     if (t->memcat < LUA_FIRST_USER_MEMCAT)
         luaL_argerror(L, 1, "cannot shrink system table");
 
-    bool reorder = lua_toboolean(L, 2) != 0;
-    luaH_shrink(L, t, reorder);
+    bool shrink_sparse = lua_toboolean(L, 2) != 0;
+    luaH_shrink(L, t, shrink_sparse);
     lua_pushvalue(L, 1);
     return 1;
 }

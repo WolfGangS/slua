@@ -1063,11 +1063,11 @@ void luaH_overrideiterorder(lua_State* L, LuaTable* t, int override)
 }
 
 // ServerLua: shrink table to optimal size
-void luaH_shrink(lua_State* L, LuaTable* t, bool reorder)
+void luaH_shrink(lua_State* L, LuaTable* t, bool shrink_sparse)
 {
     // Shrink table to reduce memory usage.
-    // If reorder=false (default), preserves iteration order by not moving elements to hash.
-    // If reorder=true, may shrink to boundary and move sparse elements to hash.
+    // If shrink_sparse=false (default), elements stay in their current part (array or hash).
+    // If shrink_sparse=true, sparse array elements beyond boundary may move to hash to save memory.
 
     // No-op for empty tables
     if (!t->sizearray && !t->lsizenode)
@@ -1098,8 +1098,8 @@ void luaH_shrink(lua_State* L, LuaTable* t, bool reorder)
             hash_count++;
     }
 
-    // If reorder allowed and there are sparse elements, try shrinking to boundary
-    if (reorder && sparse_count > 0)
+    // If shrink_sparse, try shrinking array to boundary and moving sparse elements to hash
+    if (shrink_sparse && sparse_count > 0)
     {
         // We're allowed to move things to the hash part of the table, check if it would be cheaper
         // memory-wise to do that than it would be for us to just shrink array and node to their minimum
@@ -1108,20 +1108,33 @@ void luaH_shrink(lua_State* L, LuaTable* t, bool reorder)
         int new_hash_count = hash_count + sparse_count;
         // hash portion resizes in pow2 increments, sometimes putting things in the hash is basically
         // free if we're already using it.
-        int reorder_hash_capacity = 1 << ceillog2(new_hash_count);
-        int no_reorder_hash_capacity = hash_count == 0 ? 0 : (1 << ceillog2(hash_count));
-        int reorder_cost = boundary + (2 * reorder_hash_capacity);
-        int no_reorder_cost = max_used_idx + (2 * no_reorder_hash_capacity);
+        int sparse_hash_capacity = 1 << ceillog2(new_hash_count);
+        int keep_hash_capacity = hash_count == 0 ? 0 : (1 << ceillog2(hash_count));
+        int sparse_cost = boundary + (2 * sparse_hash_capacity);
+        int keep_cost = max_used_idx + (2 * keep_hash_capacity);
 
         // Would this be smaller memory-wise if we moved some things to the hash portion?
-        if (reorder_cost < no_reorder_cost)
+        if (sparse_cost < keep_cost)
         {
             resize(L, t, boundary, new_hash_count);
             return;
         }
     }
 
-    // Default: shrink to max_used_idx (no elements move, preserves iteration order)
-    if (max_used_idx < t->sizearray || hash_count < orig_sizenode)
+    // Compute actual new hash capacity to avoid rebuilds that can't shrink
+    bool array_shrinks = max_used_idx < t->sizearray;
+    int new_node_capacity = hash_count == 0 ? 0 : twoto(ceillog2(hash_count));
+    bool hash_shrinks = new_node_capacity < orig_sizenode;
+
+    if (hash_shrinks)
+    {
+        // Hash genuinely shrinks (possibly array too), full resize needed
         resize(L, t, max_used_idx, hash_count);
+    }
+    else if (array_shrinks)
+    {
+        // Only array needs shrinking. All elements past max_used_idx are nil
+        // so no elements move to hash, plain array realloc suffices.
+        setarrayvector(L, t, max_used_idx);
+    }
 }
