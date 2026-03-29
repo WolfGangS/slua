@@ -1048,10 +1048,11 @@ static void p_table(Info *info) {                                  /* ... tbl */
   LuaTable* table = hvalue(table_tv);
   WRITE_VALUE(table->readonly, uint8_t);
   WRITE_VALUE(table->safeenv, uint8_t);
+  int hash_size = (table->node == &luaH_dummynode) ? 0 : sizenode(table);
   WRITE_VALUE(table->sizearray, int);
-  WRITE_VALUE(sizenode(table), int);
+  WRITE_VALUE(hash_size, int);
 
-  int table_size = sizenode(table) + table->sizearray;
+  int table_size = hash_size + table->sizearray;
   /* Persist all key / value pairs. */
   for (int i = 0; i < table_size; ++i) {
     TValue key;
@@ -1247,7 +1248,7 @@ static void u_table(Info *info) {                                      /* ... */
 
   // If this table has a hash component we need to be careful about iteration order
   bool override_iterorder = false;
-  if (table->lsizenode) {
+  if (table->node != &luaH_dummynode) {
     if (hash_size != actual_hash_size) {
       // If bucketing changed, then we obviously need to override.
       override_iterorder = true;
