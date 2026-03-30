@@ -730,10 +730,6 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
     if (luau_load(L, chunkname.c_str(), bytecode.data(), bytecode.size(), 0) == 0)
     {
         replFreeObjects = lua_collectfreeobjects(L);
-        // The thread and its globals table are per-script state, not free, even though
-        // they were already on the stack.
-        replFreeObjects.erase(lua_topointer(L, LUA_GLOBALSINDEX));
-        replFreeObjects.erase((const void*)L);
         replBytecodeSize = bytecode.size();
 
         if (sl)
