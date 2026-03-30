@@ -84,6 +84,11 @@ static void sigintCallback(lua_State* L, int gc)
 }
 
 static lua_State* replState = NULL;
+// ServerLua: For our fake memory tracking stuff, note that this might not
+//  be 100% representative of prod behavior, especially around `require()`
+//  and its memory side-effects.
+static lua_OpaqueGCObjectSet replFreeObjects;
+static size_t replBytecodeSize = 0;
 
 #ifdef _WIN32
 BOOL WINAPI sigintHandler(DWORD signal)
@@ -185,8 +190,14 @@ static int lua_graphheap_wrapper(lua_State* L)
 static int lua_graphuserheap_wrapper(lua_State* L)
 {
     const char* path = luaL_checkstring(L, 1);
-    lua_graphuserheap(replState, path, nullptr);
+    lua_graphuserheap(replState, path, &replFreeObjects);
     return 0;
+}
+
+static int lua_getusedmemory_wrapper(lua_State* L)
+{
+    lua_pushnumber(L, (double)(lua_userthreadsize(replState, &replFreeObjects) + replBytecodeSize));
+    return 1;
 }
 
 #ifdef CALLGRIND
@@ -280,6 +291,11 @@ void setupState(lua_State* L)
             lua_pop(L, 1);
         }
         luaopen_ll(L, true);
+        lua_pop(L, 1);
+
+        lua_getglobal(L, "ll");
+        lua_pushcfunction(L, lua_getusedmemory_wrapper, "ll.GetUsedMemory");
+        lua_setfield(L, -2, "GetUsedMemory");
         lua_pop(L, 1);
         // Set the builtin constants on _G if we have any.
         luaSL_set_constant_globals(L);

@@ -989,24 +989,13 @@ static int ll_sleep(lua_State *)
 
 static int ll_getusedmemory(lua_State* L)
 {
-    luaC_fullgc(L);
-    int total_size = lua_totalmemoverhead(L);
-
-    FILE* f = fopen("/tmp/memdump.json", "w");
-    LUAU_ASSERT(f);
-
-    luaC_dump(L, f, nullptr);
-
-    fclose(f);
-    lua_pushnumber(L, lua_totalbytes(L, 2));
+    luaSL_pushnativeinteger(L, 1);
     return 1;
 }
 
 static int ll_getfreememory(lua_State *L)
 {
-    luaC_fullgc(L);
-    luaX_graphheap(L, "/tmp/whatever.json");
-    luaSL_pushnativeinteger(L, (int)lua_userthreadsize(L, nullptr));
+    luaSL_pushnativeinteger(L, 0x7FFffFF);
     return 1;
 }
 
