@@ -160,7 +160,7 @@ typedef int lua_Integer;
 typedef unsigned lua_Unsigned;
 
 // ServerLua: opaque set of GC object pointers for per-script memory accounting
-typedef std::unordered_set<void*> lua_OpaqueGCObjectSet;
+typedef std::unordered_set<const void*> lua_OpaqueGCObjectSet;
 
 /*
 ** state manipulation
@@ -376,6 +376,10 @@ LUA_API void lua_setmemcat(lua_State* L, int category);
 LUA_API int lua_getmemcat(lua_State* L);
 LUA_API size_t lua_totalbytes(lua_State* L, int category);
 
+// ServerLua:
+// First user-assignable memory category; categories below this are reserved for system use
+#define LUA_FIRST_USER_MEMCAT 10
+
 /*
 ** miscellaneous functions
 */
@@ -391,6 +395,8 @@ LUA_API void lua_concat(lua_State* L, int n);
 LUA_API uintptr_t lua_encodepointer(lua_State* L, uintptr_t p);
 
 LUA_API double lua_clock();
+// ServerLua: per-thread CPU time in seconds (falls back to lua_clock on unsupported platforms)
+LUA_API double lua_cputime();
 
 LUA_API void lua_setrandomseed(lua_State* L, uint64_t seed);
 
@@ -419,6 +425,7 @@ LUA_API lua_Alloc lua_getallocf(lua_State* L, void** ud);
 // ServerLua: GC additions
 LUA_API void lua_fixallcollectable(lua_State *L);
 LUA_API void lua_graphheap(lua_State *L, const char *out);
+LUA_API void lua_graphuserheap(lua_State *L, const char *out, const lua_OpaqueGCObjectSet *free_objects);
 LUA_API void lua_dumpgc(lua_State *L, const char *out);
 LUA_API void lua_gcvalidate(lua_State *L);
 // Add utility for marking something on the stack as being un-collectable
@@ -433,7 +440,7 @@ LUA_API int lua_totalmemoverhead(lua_State *L);
 // Gets the total size of all user-allocated objects reachable from a user thread.
 // If free_objects is provided, objects in that set will be excluded from the size calculation.
 LUA_API size_t lua_userthreadsize(lua_State *L, const lua_OpaqueGCObjectSet* free_objects);
-// Collects all memcat 2+ objects reachable from a user thread into a set.
+// Collects all user memcat (>= LUA_FIRST_USER_MEMCAT) objects reachable from a user thread into a set.
 // Intended to be called immediately after luau_load() to capture bytecode constants.
 LUA_API lua_OpaqueGCObjectSet lua_collectfreeobjects(lua_State *L);
 
@@ -549,6 +556,9 @@ static void populateperms(lua_State *L, bool forUnpersist)
 #if defined(eris_c) || defined(lstrlib_c)
     eris_persist_static(strlib, gmatch_aux)
 #endif
+#if defined(eris_c) || defined(lyieldstrlib_c)
+    eris_persist_cont(lyieldstrlib, yieldable_gmatch_aux_v0, yieldable_gmatch_aux_v0_k)
+#endif
 #if defined(eris_c) || defined(lutf8lib_c)
     eris_persist_static(utf8lib, iter_aux)
 #endif
@@ -563,12 +573,12 @@ static void populateperms(lua_State *L, bool forUnpersist)
     eris_persist_static_cont(corolib, auxwrapy, auxwrapcont)
 #endif
 #if defined(eris_c) || defined(lllevents_c)
-    eris_persist_static_cont(llevents, llevents_handle_event_init, llevents_handle_event_cont)
+    eris_persist_static_cont(llevents, llevents_handle_event_v0, llevents_handle_event_v0_k)
     eris_persist_static_cont(llevents, llevents_once_wrapper, llevents_once_wrapper_cont)
     eris_persist_static(llevents, timer_wrapper_guard)
 #endif
 #if defined(eris_c) || defined(llltimers_c)
-    eris_persist_static_cont(llltimers, lltimers_tick_init, lltimers_tick_cont)
+    eris_persist_static_cont(llltimers, lltimers_tick_v0, lltimers_tick_v0_k)
     eris_persist_cont(llltimers, timer_event_wrapper, timer_event_wrapper_cont)
 #endif
 #if defined(eris_c)
@@ -635,6 +645,14 @@ typedef void (*lua_Coverage)(void* context, const char* function, int linedefine
 
 LUA_API void lua_getcoverage(lua_State* L, int funcindex, void* context, lua_Coverage callback);
 
+typedef void (*lua_CounterFunction)(void* context, const char* function, int linedefined);
+typedef void (*lua_CounterValue)(void* context, int kind, int line, uint64_t hits);
+
+// Unlike 'lua_getcoverage', counters are customizable in ways which prevent merging them together
+// 'lua_getcounters' will visit the specified function and all nested functions
+// 'functionvisit' is called first to establish a function, then multiple calls of 'countervisit' are made for each counter in that function
+LUA_API void lua_getcounters(lua_State* L, int funcindex, void* context, lua_CounterFunction functionvisit, lua_CounterValue countervisit);
+
 // Warning: this function is not thread-safe since it stores the result in a shared global array! Only use for debugging.
 LUA_API const char* lua_debugtrace(lua_State* L);
 
@@ -672,7 +690,7 @@ struct lua_Callbacks
     void (*panic)(lua_State* L, int errcode); // gets called when an unprotected error is raised (if longjmp is used)
 
     void (*userthread)(lua_State* LP, lua_State* L); // gets called when L is created (LP == parent) or destroyed (LP == NULL)
-    int16_t (*useratom)(const char* s, size_t l);    // gets called when a string is created; returned atom can be retrieved via tostringatom
+    int16_t (*useratom)(lua_State* L, const char* s, size_t l);    // gets called when a string is created; returned atom can be retrieved via tostringatom
 
     void (*debugbreak)(lua_State* L, lua_Debug* ar);     // gets called when BREAK instruction is encountered
     void (*debugstep)(lua_State* L, lua_Debug* ar);      // gets called after each instruction in single step mode

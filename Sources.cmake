@@ -88,6 +88,7 @@ target_sources(Luau.CodeGen PRIVATE
     CodeGen/include/Luau/AddressA64.h
     CodeGen/include/Luau/AssemblyBuilderA64.h
     CodeGen/include/Luau/AssemblyBuilderX64.h
+    CodeGen/include/Luau/CodeAllocationData.h
     CodeGen/include/Luau/CodeAllocator.h
     CodeGen/include/Luau/CodeBlockUnwind.h
     CodeGen/include/Luau/CodeGen.h
@@ -424,6 +425,10 @@ target_sources(Luau.VM PRIVATE
     VM/src/lllevents.h
     VM/src/llltimers.cpp
     VM/src/llltimers.h
+    VM/src/lyieldable.cpp
+    VM/src/lstrbuf.cpp
+    VM/src/lyieldstrlib.h
+    VM/src/lyieldstrlib.cpp
 
     # ServerLua: CJson
     VM/src/cjson/dtoa_config.h
@@ -431,8 +436,6 @@ target_sources(Luau.VM PRIVATE
     VM/src/cjson/fpconv.h
     VM/src/cjson/lua_cjson.cpp
     VM/src/cjson/dtoa_config.h
-    VM/src/cjson/strbuf.cpp
-    VM/src/cjson/strbuf.h
 
     # ServerLua: base64-related routines from APR
     VM/src/apr/apr_base64.cpp
@@ -460,10 +463,12 @@ target_sources(Luau.CLI.lib PRIVATE
 if(TARGET Luau.Repl.CLI)
     # Luau.Repl.CLI Sources
     target_sources(Luau.Repl.CLI PRIVATE
+        CLI/include/Luau/Counters.h
         CLI/include/Luau/Coverage.h
         CLI/include/Luau/Profiler.h
         CLI/include/Luau/ReplRequirer.h
 
+        CLI/src/Counters.cpp
         CLI/src/Coverage.cpp
         CLI/src/Profiler.cpp
         CLI/src/Repl.cpp
@@ -617,10 +622,12 @@ endif()
 if(TARGET Luau.CLI.Test)
     # Luau.CLI.Test Sources
     target_sources(Luau.CLI.Test PRIVATE
+        CLI/include/Luau/Counters.h
         CLI/include/Luau/Coverage.h
         CLI/include/Luau/Profiler.h
         CLI/include/Luau/ReplRequirer.h
 
+        CLI/src/Counters.cpp
         CLI/src/Coverage.cpp
         CLI/src/Profiler.cpp
         CLI/src/Repl.cpp

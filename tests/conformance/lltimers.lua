@@ -135,6 +135,10 @@ local success, err = pcall(function()
 end)
 assert(success == false)
 
+-- Test NaN interval
+assert_errors(function() LLTimers:every(0/0, function() end) end, "timer interval must be a positive number or 0")
+assert_errors(function() LLTimers:once(0/0, function() end) end, "timer interval must be a positive number or 0")
+
 -- Test zero interval (0 means "ASAP" and is valid)
 timer1_count = 0
 local function zero_interval_handler()
@@ -355,28 +359,28 @@ LLTimers:off(reentrant_handler)
 
 -- Test automatic registration with LLEvents when first timer is added
 setclock(4.0)
-assert(#LLEvents:listeners("timer") == 0)
+assert(#LLEvents:handlers("timer") == 0)
 
 local auto_reg_timer1 = LLTimers:every(1.0, function() end)
-assert(#LLEvents:listeners("timer") == 1)
+assert(#LLEvents:handlers("timer") == 1)
 
--- Adding second timer should not add another listener
+-- Adding second timer should not add another handler
 local auto_reg_timer2 = LLTimers:every(2.0, function() end)
-assert(#LLEvents:listeners("timer") == 1)
+assert(#LLEvents:handlers("timer") == 1)
 
--- Removing first timer should keep listener (still have timer2)
+-- Removing first timer should keep handler (still have timer2)
 LLTimers:off(auto_reg_timer1)
-assert(#LLEvents:listeners("timer") == 1)
+assert(#LLEvents:handlers("timer") == 1)
 
 -- Removing last timer should auto-deregister
 LLTimers:off(auto_reg_timer2)
-assert(#LLEvents:listeners("timer") == 0)
+assert(#LLEvents:handlers("timer") == 0)
 
--- Test that once() handler adding a timer doesn't duplicate listeners
+-- Test that once() handler adding a timer doesn't duplicate handlers
 -- Regression test: when the only timer is a once() that re-registers itself,
--- the listener count should stay at 1, not grow unboundedly.
+-- the handler count should stay at 1, not grow unboundedly.
 setclock(0)
-assert(#LLEvents:listeners("timer") == 0)
+assert(#LLEvents:handlers("timer") == 0)
 
 local reregister_count = 0
 local function reregister_handler()
@@ -387,32 +391,32 @@ local function reregister_handler()
 end
 
 LLTimers:once(0.1, reregister_handler)
-assert(#LLEvents:listeners("timer") == 1)
+assert(#LLEvents:handlers("timer") == 1)
 
 -- Fire multiple times, each time the handler adds a new once() timer
 for i = 1, 4 do
     incrementclock(0.1)
     LLEvents:_handleEvent('timer')
     -- Should ALWAYS be 1, never grow
-    assert(#LLEvents:listeners("timer") == 1,
-        "Listener count should stay at 1, got " .. #LLEvents:listeners("timer"))
+    assert(#LLEvents:handlers("timer") == 1,
+        "Handler count should stay at 1, got " .. #LLEvents:handlers("timer"))
 end
 
 -- After final once() fires without re-registering, should be 0
 incrementclock(0.1)
 LLEvents:_handleEvent('timer')
 assert(reregister_count == 5)
-assert(#LLEvents:listeners("timer") == 0)
+assert(#LLEvents:handlers("timer") == 0)
 
--- Test that timer wrapper in listeners() cannot be called directly
+-- Test that timer wrapper in handlers() cannot be called directly
 local guard_timer = LLTimers:every(1.0, function() end)
-local timer_listeners = LLEvents:listeners("timer")
-assert(#timer_listeners == 1)
+local timer_handlers = LLEvents:handlers("timer")
+assert(#timer_handlers == 1)
 
-local guard_func = timer_listeners[1]
+local guard_func = timer_handlers[1]
 assert_errors(function()
     guard_func()
-end, "Cannot call internal timer wrapper directly")
+end, "Cannot call internal wrapper directly")
 
 -- Verify guard function exists
 assert(guard_func ~= nil)

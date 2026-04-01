@@ -58,6 +58,7 @@ THE SOFTWARE.
 #include "ltable.h"
 #include "ludata.h"
 #include "llsl.h"
+#include "lstrbuf.h"
 #include "lljson.h"
 #include "Luau/Bytecode.h"
 
@@ -303,9 +304,16 @@ static char const kHeader[] = { 'A', 'R', 'E', 'S' };
 static const lua_Number kHeaderNumber = (lua_Number)-1.234567890;
 
 /* Version number for the file format. */
-static const uint32_t kCurrentVersion = 1;
+static const uint32_t kCurrentVersion = 2;
 /* Old format magic bytes (0x08, 0x1B, 0xDE, 0x83 in little-endian). */
 static const uint32_t kOldMagicBytes = 0x83DE1B08;
+
+
+// Return whether a type is a GC object that carries a serialized memcat.
+static inline bool type_has_memcat(uint8_t type) {
+    return type == LUA_TSTRING || type == LUA_TBUFFER || type == LUA_TTABLE ||
+           type == LUA_TFUNCTION || type == LUA_TUSERDATA || type == LUA_TTHREAD;
+}
 
 /* Stack indices of some internal values/tables, to avoid magic numbers. */
 #define PERMIDX 1
@@ -1040,10 +1048,11 @@ static void p_table(Info *info) {                                  /* ... tbl */
   LuaTable* table = hvalue(table_tv);
   WRITE_VALUE(table->readonly, uint8_t);
   WRITE_VALUE(table->safeenv, uint8_t);
+  int hash_size = (table->node == &luaH_dummynode) ? 0 : sizenode(table);
   WRITE_VALUE(table->sizearray, int);
-  WRITE_VALUE(sizenode(table), int);
+  WRITE_VALUE(hash_size, int);
 
-  int table_size = sizenode(table) + table->sizearray;
+  int table_size = hash_size + table->sizearray;
   /* Persist all key / value pairs. */
   for (int i = 0; i < table_size; ++i) {
     TValue key;
@@ -1239,7 +1248,7 @@ static void u_table(Info *info) {                                      /* ... */
 
   // If this table has a hash component we need to be careful about iteration order
   bool override_iterorder = false;
-  if (table->lsizenode) {
+  if (table->node != &luaH_dummynode) {
     if (hash_size != actual_hash_size) {
       // If bucketing changed, then we obviously need to override.
       override_iterorder = true;
@@ -1316,6 +1325,7 @@ static void p_userdata(Info *info) {                               /* ... udata 
   switch(utag) {
     case UTAG_PROXY:
     case UTAG_QUATERNION:
+    case UTAG_OPAQUE_BUFFER:
       WRITE_VALUE(size, ares_size_t);
       WRITE_RAW(value, size);
       break;
@@ -1337,7 +1347,7 @@ static void p_userdata(Info *info) {                               /* ... udata 
     case UTAG_LLEVENTS:
     {
         const auto *llevents = (lua_LLEvents*)value;
-        lua_getref(info->L, llevents->listeners_tab_ref);
+        lua_getref(info->L, llevents->handlers_tab_ref);
                                                         /* ... udata handlers */
         persist(info);
         lua_pop(info->L, 1);                                     /* ... udata */
@@ -1360,6 +1370,14 @@ static void p_userdata(Info *info) {                               /* ... udata 
         lua_pop(info->L, 1);                                     /* ... udata */
         break;
     }
+    case UTAG_STRBUF:
+    {
+        const auto *buf = (const lua_YieldSafeStrBuf*)value;
+        WRITE_VALUE(buf->size, ares_size_t);
+        WRITE_VALUE(buf->length, ares_size_t);
+        WRITE_RAW(buf->buf, buf->length);
+        break;
+    }
     default:
       eris_error(info, "Unknown userdata type %d", utag);
       break;
@@ -1374,6 +1392,7 @@ static void u_userdata(Info *info) {                                   /* ... */
   {
     uint8_t utag = READ_VALUE(uint8_t);
     switch(utag) {
+      case UTAG_OPAQUE_BUFFER:
       case UTAG_PROXY:
       {
           size_t size = READ_VALUE(ares_size_t);
@@ -1440,17 +1459,17 @@ static void u_userdata(Info *info) {                                   /* ... */
               UTAG_LLEVENTS
           );
                                                               /* ... llevents */
-          llevents->listeners_tab_ref = -1;
-          llevents->listeners_tab = nullptr;
+          llevents->handlers_tab_ref = -1;
+          llevents->handlers_tab = nullptr;
 
-          // Register immediately to handle cycles (listeners_tab may reference this)
+          // Register immediately to handle cycles (handlers_tab may reference this)
           registerobject(info);
 
-          // Unpersist listeners_tab and store ref IMMEDIATELY to prevent leaks
+          // Unpersist handlers_tab and store ref IMMEDIATELY to prevent leaks
           unpersist(info);                           /* ... llevents handlers_tab */
           eris_checktype(info, -1, LUA_TTABLE);
-          llevents->listeners_tab_ref = lua_ref(info->L, -1);
-          llevents->listeners_tab = hvalue(luaA_toobject(info->L, -1));
+          llevents->handlers_tab_ref = lua_ref(info->L, -1);
+          llevents->handlers_tab = hvalue(luaA_toobject(info->L, -1));
           lua_pop(info->L, 1);                                    /* ... llevents */
 
           break;
@@ -1491,6 +1510,28 @@ static void u_userdata(Info *info) {                                   /* ... */
           lltimers->timer_wrapper_ref = lua_ref(info->L, -1);
           lua_pop(info->L, 1);                                     /* ... lltimers */
 
+          break;
+      }
+      case UTAG_STRBUF:
+      {
+          size_t size = READ_VALUE(ares_size_t);
+          size_t length = READ_VALUE(ares_size_t);
+          VALIDATE_SIZE(length);
+          if (size < length)
+              eris_error(info, "malformed data: strbuf size less than length");
+          if (size < STRBUF_DEFAULT_SIZE)
+              size = STRBUF_DEFAULT_SIZE;
+
+          auto *buf = (lua_YieldSafeStrBuf*)
+              lua_newuserdatatagged(info->L, sizeof(lua_YieldSafeStrBuf), UTAG_STRBUF);
+                                                                   /* ... udata */
+          buf->buf = (char*)luaM_new_(info->L, size, info->L->activememcat);
+          buf->length = uint32_t(length);
+          buf->size = uint32_t(size);
+          if (length > 0)
+              READ_RAW(buf->buf, length);
+
+          registerobject(info);
           break;
       }
       default:
@@ -1780,6 +1821,9 @@ u_proto(Info *info) {                                            /* ... proto */
   for (i=0; i<p->sizeyieldpoints; ++i)
   {
       p->yieldpoints[i] = READ_VALUE(int32_t);
+      if (p->yieldpoints[i] < 0 || p->yieldpoints[i] >= p->sizecode) {
+        eris_error(info, "malformed data: invalid yield point");
+      }
   }
 
   // Assign bytecodeid at the end after all dangerous unpersist calls
@@ -2225,6 +2269,8 @@ p_thread(Info *info) {                                          /* ... thread */
 
   /* Write general information. */
   WRITE_VALUE(thread->status, uint8_t);
+  // Write thread's activememcat
+  WRITE_VALUE(thread->activememcat, uint8_t);
 //  WRITE_VALUE(eris_savestackidx(thread,
 //    eris_restorestack(thread, thread->errfunc)), size_t);
   // no err func!
@@ -2268,8 +2314,6 @@ p_thread(Info *info) {                                          /* ... thread */
 
       // PC relative to the start of the code
       int64_t pc_offset = ci->savedpc - lcl->l.p->code;
-      // the PC had better be in bounds.
-      eris_assert(pc_offset >= 0 && pc_offset < lcl->l.p->sizecode);
 
       int yield_point = -1;
       for (int j = 0; j< lcl->l.p->sizeyieldpoints; ++j) {
@@ -2337,7 +2381,10 @@ p_thread(Info *info) {                                          /* ... thread */
     pushpath(info, "[%d]", level++);
     WRITE_VALUE(eris_savestackidx(thread, uv->v) + 1, ares_size_t);
     eris_setobj(info->L, info->L->top - 1, uv->v);          /* ... thread obj */
-    lua_pushlightuserdata(info->L, uv);                  /* ... thread obj id */
+    // Use `uv->v` (stack slot address) with `LUTAG_ARES_UPREF as the key
+    // so we can have this point at the underlying value on the stack.
+    // `uv` itself is generally irrelevant.
+    lua_pushlightuserdatatagged(info->L, uv->v, LUTAG_ARES_UPREF); /* ... thread obj id */
     persist_keyed(info, LUA_TUPVAL);                        /* ... thread obj */
     poppath(info);
     eris_assert(uv_top == lua_gettop(info->L));
@@ -2430,6 +2477,9 @@ u_thread(Info *info) {                                                 /* ... */
 
   /* Read general information. */
   thread->status = READ_VALUE(uint8_t);
+  // Read thread's activememcat in version >= 2
+  if (info->u.upi.version >= 2)
+      thread->activememcat = READ_VALUE(uint8_t);
   /* size_t _errfunc = */ READ_VALUE(ares_size_t);
   /* These are only used while a thread is being executed or can be deduced:
   thread->nCcalls = READ_VALUE(uint16_t);
@@ -2650,6 +2700,12 @@ persist_typed(Info *info, int type) {                 /* perms reftbl ... obj */
   ++info->level;
 
   WRITE_VALUE(type, uint8_t);
+  // Write memcat for GC object types
+  if (type_has_memcat(type))
+  {
+      const TValue* tv = luaA_toobject(info->L, -1);
+      WRITE_VALUE(gcvalue(tv)->gch.memcat, uint8_t);
+  }
   switch(type) {
     case LUA_TBOOLEAN:
       p_boolean(info);
@@ -2821,6 +2877,13 @@ unpersist(Info *info) {                                   /* perms reftbl ... */
   eris_checkstack(info->L, 1);
   {
     const uint8_t type = READ_VALUE(uint8_t);
+    // Read memcat for GC object types in version >= 2
+    uint8_t obj_memcat = info->L->activememcat;
+    if (info->u.upi.version >= 2 && type_has_memcat(type))
+    {
+        obj_memcat = READ_VALUE(uint8_t);
+    }
+    MemcatGuard guard(info->L, obj_memcat);
     switch (type) {
       case LUA_TNIL:
         lua_pushnil(info->L);
@@ -2971,6 +3034,11 @@ static void scan_metatable(lua_State *L, bool forUnpersist, const std::string& p
 
     // Register the metatable as a permanent
     std::string mt_name = prefix + "/mt";
+
+    // empty_array/empty_object are special, they share array_mt/object_mt, which are
+    // registered under their canonical names. Skip the alias to avoid duplicates.
+    if (mt_name == "g/lljson/empty_array/mt" || mt_name == "g/lljson/empty_object/mt")
+        return;
 
     if (forUnpersist) {
         lua_pushstring(L, mt_name.c_str());      // ... perms obj_table mt name
@@ -3327,25 +3395,13 @@ unchecked_persist(lua_State *L, std::ostream *writer) {
   eris_populate_perms(L, false);
   lua_pop(L, 1);                           /* perms reftbl buff path? rootobj */
 
-#if HARDSTACKTESTS
-  // Arrange the stack to make it more likely that we hit any lua_checkstack() misuse
   int pre_pad_top = lua_gettop(L);
-  lua_checkstack(L, LUA_MINSTACK);
-  while (lua_gettop(L) != LUA_MINSTACK - 1) {
-    lua_pushnil(L);
-  }
-  // A reference to the root obj needs to end back up on top
-  lua_pushvalue(L, pre_pad_top);
-  eris_assert(lua_gettop(L) == LUA_MINSTACK);
-#endif
+  lua_hardenstack(L, 1);
 
   p_header(&info);
   persist(&info);                          /* perms reftbl buff path? rootobj */
 
-#if HARDSTACKTESTS
-  lua_pop(L, LUA_MINSTACK - pre_pad_top);
-  eris_assert(lua_gettop(L) == pre_pad_top);
-#endif
+  lua_settop(L, pre_pad_top);
 
   if (info.generatePath) {                  /* perms reftbl buff path rootobj */
     lua_remove(L, PATHIDX);                      /* perms reftbl buff rootobj */
@@ -3417,27 +3473,17 @@ unchecked_unpersist(lua_State *L, std::istream *reader) {/* perms str? */
   eris_populate_perms(L, true);
   lua_pop(L, 1);                              /* perms reftbl nil? path? str? */
 
-#if HARDSTACKTESTS
-  // Arrange the stack to make it more likely that we hit any lua_checkstack() misuse
   int pre_pad_top = lua_gettop(L);
-  lua_checkstack(L, LUA_MINSTACK);
-  while (lua_gettop(L) != LUA_MINSTACK - 1) {
-      lua_pushnil(L);
-  }
-  // A reference to the root obj needs to end back up on top
-  lua_pushvalue(L, pre_pad_top);
-  eris_assert(lua_gettop(L) == LUA_MINSTACK);
-#endif
+  lua_hardenstack(L, 1);
 
   u_header(&info);
   unpersist(&info);                   /* perms reftbl nil? path? str? rootobj */
 
-#if HARDSTACKTESTS
-  // Slot the top of the stack back in where it should be
-  lua_replace(L, pre_pad_top + 1);
-  lua_pop(L, LUA_MINSTACK - pre_pad_top - 1);
-  eris_assert(lua_gettop(L) == pre_pad_top + 1);
-#endif
+  /* Get rid of any padding we might have added, leave just the result */
+  if (lua_gettop(L) > pre_pad_top + 1) {
+    lua_replace(L, pre_pad_top + 1);
+    lua_settop(L, pre_pad_top + 1);
+  }
 
   if (info.generatePath) {              /* perms reftbl nil path str? rootobj */
     lua_remove(L, PATHIDX);                  /* perms reftbl nil str? rootobj */
@@ -3818,7 +3864,6 @@ eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat) {
       lua_remove(Lforker, -2);  // remove state string
       return nullptr;
     }
-    eris_assert(lua_getmemcat(lua_tothread(Lforker, -1)) == memcat);
   } else {
     // ServerLua: Make sure the error message is included (error types with messages on stack)
     eris_assert(status == LUA_ERRRUN || status == LUA_ERRKILL);

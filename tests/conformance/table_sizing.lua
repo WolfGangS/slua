@@ -144,11 +144,11 @@ t[1537] = true
 check_sizes(t, 1664, 4, "after spillover - array grew")
 assert(t[1538] == true, "1538 still present")
 
--- System tables (memcat < 2) use power-of-2 sizing, no cap
+-- System tables (memcat < 10) use power-of-2 sizing, no cap
 change_memcat(0)
 t = make_array(600)
 check_sizes(t, 1024, 0, "system table memcat 0")
-change_memcat(2)
+change_memcat(10)
 
 -- table.shrink tests
 
@@ -171,6 +171,20 @@ t.b = 2
 t.c = 3
 table.shrink(t)
 check_sizes(t, 0, 4, "shrunk hash only")  -- 4 is smallest power-of-2 >= 3
+
+-- Shrink is no-op when hash is already at minimal capacity (no useless rebuild)
+t = {}
+for i = 1, 12 do t[`key {i}`] = true end
+check_sizes(t, 0, 16, "12 elements in 16-slot hash")
+local order_before = {}
+for k in t do table.insert(order_before, k) end
+table.shrink(t)
+check_sizes(t, 0, 16, "hash capacity unchanged after shrink")
+local order_after = {}
+for k in t do table.insert(order_after, k) end
+for i = 1, #order_before do
+    assert(order_before[i] == order_after[i], "iteration order preserved when hash cannot shrink")
+end
 
 -- Shrink mixed array/hash - dense path shrinks to exact boundary
 t = make_array(100)
@@ -218,19 +232,19 @@ assert(t[1] == true, "t[1] preserved after shrink")
 assert(t[100] == true, "t[100] preserved after shrink")
 assert(t.key == "value", "hash data preserved after shrink")
 
--- Default shrink preserves iteration order (no elements move to hash)
+-- Default shrink keeps elements in their current part (no elements move to hash)
 t = table.create(2000)
 for i = 1, 600 do t[i] = true end
 t[1500] = true  -- Sparse element in array at high index
 table.shrink(t)
 check_sizes(t, 1500, 0, "default shrink - preserves order")
 
--- With reorder=true, sparse elements move to hash for better memory usage
+-- With shrink_sparse=true, sparse elements move to hash for better memory usage
 t = table.create(2000)
 for i = 1, 600 do t[i] = true end
 t[1500] = true
 table.shrink(t, true)
-check_sizes(t, 600, 1, "reorder shrink - sparse element to hash")
+check_sizes(t, 600, 1, "shrink_sparse - sparse element to hash")
 assert(t[1500] == true, "sparse element preserved after move to hash")
 
 -- Reorder with element closer to boundary
@@ -239,9 +253,9 @@ for i = 1, 600 do t[i] = true end
 t[700] = true  -- Sparse element
 table.shrink(t, true)
 -- boundary=600, element at 700 moves to hash, array shrinks to 600
-check_sizes(t, 600, 1, "reorder shrink - element near boundary to hash")
+check_sizes(t, 600, 1, "shrink_sparse - element near boundary to hash")
 
--- Even with reorder=true, if moving elements to hash would grow the table,
+-- Even with shrink_sparse=true, if moving elements to hash would grow the table,
 -- we fall back to shrinking to max_used_idx instead.
 t = table.create(100)
 t[1] = true
@@ -249,7 +263,23 @@ for i = 3, 52 do t[i] = true end
 check_sizes(t, 100, 0, "starts at 100 array elements")
 table.shrink(t, true)
 -- Falls back to max_used_idx since boundary shrink would grow table
-check_sizes(t, 52, 0, "reorder fallback - boundary too expensive")
+check_sizes(t, 52, 0, "shrink_sparse fallback - boundary too expensive")
+
+-- shrink_sparse with large hash and few sparse elements doesn't OOM
+-- When hash capacity wouldn't change, elements are inserted directly without resize
+t = {}
+for i = 1, 16 do t[i] = i end
+for i = 1, 1025 do t[`k{i}`] = i end
+for i = 2, 15 do t[i] = nil end
+-- boundary=0, max_used_idx=16, hash=1025 in 2048-capacity node
+assert(#t == 16, "len before shrink")
+table.shrink(t, true)
+-- Sparse element t[16] moves to hash, array shrinks to 1 (preserving first elem)
+check_sizes(t, 1, 2048, "shrink_sparse without hash resize")
+assert(t[16] == 16, "sparse element preserved")
+assert(t[1] == 1, "left element preserved")
+assert(t.k1 == 1, "hash element preserved")
+assert(#t == 1, "boundary correct after sparse elements moved to hash")
 
 -- Idempotent - second shrink is no-op
 t = make_array(1000)

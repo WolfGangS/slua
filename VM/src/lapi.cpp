@@ -65,7 +65,7 @@ const char* luau_ident = "$Luau: Copyright (C) 2019-2024 Roblox Corporation $\n"
 #define updateatom(L, ts) \
     { \
         if (ts->atom == ATOM_UNDEF) \
-            ts->atom = L->global->cb.useratom ? L->global->cb.useratom(ts->data, ts->len) : -1; \
+            ts->atom = L->global->cb.useratom ? L->global->cb.useratom(L, ts->data, ts->len) : -1; \
     }
 
 static LuaTable* getcurrenv(lua_State* L)
@@ -169,7 +169,7 @@ int lua_checkstack(lua_State* L, int size)
         }
         else
         {
-            condhardstacktests(luaD_reallocstack(L, L->stacksize - EXTRA_STACK, 0));
+            condhardstacktests(luaD_reallocstack(L, L->stacksize - EXTRA_STACK, 0), 1);
         }
 
         expandstacklimit(L, L->top + size);
@@ -2151,6 +2151,11 @@ CLANG_NOOPT void GCC_NOOPT lua_fixallcollectable(lua_State *L)
 void lua_graphheap(lua_State *L, const char *out)
 {
     luaX_graphheap(L, out);
+}
+
+void lua_graphuserheap(lua_State *L, const char *out, const lua_OpaqueGCObjectSet *free_objects)
+{
+    luaX_graphuserheap(L, out, free_objects);
 }
 
 void lua_gcvalidate(lua_State *L)

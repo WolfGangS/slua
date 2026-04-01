@@ -2,21 +2,21 @@ assert(#LLEvents:eventNames() == 0)
 
 local touch_handler = LLEvents:on("touch_start", function(detected) print(#detected) end)
 assert(#LLEvents:eventNames() == 1)
-assert(#LLEvents:listeners("touch_start") == 1)
-assert(LLEvents:listeners("touch_start")[1] == touch_handler)
+assert(#LLEvents:handlers("touch_start") == 1)
+assert(LLEvents:handlers("touch_start")[1] == touch_handler)
 
 assert(LLEvents:off("touch_start", touch_handler))
 
 assert(#LLEvents:eventNames() == 0)
-assert(#LLEvents:listeners("touch_start") == 0)
+assert(#LLEvents:handlers("touch_start") == 0)
 
 -- Only returns true when it was actually subscribed before
 assert(not LLEvents:off("touch_start", touch_handler))
 
 local once_handler = LLEvents:once("touch_start", function(detected) print(#detected) end)
 assert(#LLEvents:eventNames() == 1)
-assert(#LLEvents:listeners("touch_start") == 1)
-assert(LLEvents:listeners("touch_start")[1] == once_handler)
+assert(#LLEvents:handlers("touch_start") == 1)
+assert(LLEvents:handlers("touch_start")[1] == once_handler)
 
 -- Clean up before handleEvent tests
 assert(LLEvents:off("touch_start", once_handler))
@@ -57,10 +57,10 @@ assert(call_order[3] == 3)
 -- Clean up listen handlers
 local function unreg_all(event_name)
     for _, event_name in LLEvents:eventNames() do
-        for _, handler in LLEvents:listeners(event_name) do
+        for _, handler in LLEvents:handlers(event_name) do
             LLEvents:off(event_name, handler)
         end
-        assert(#LLEvents:listeners(event_name) == 0)
+        assert(#LLEvents:handlers(event_name) == 0)
     end
     assert(#LLEvents:eventNames() == 0)
 end
@@ -83,7 +83,7 @@ assert(#detected_table == 5)
 assert(typeof(detected_table[1]) == "DetectedEvent")
 -- We're outside the event handler, so this shouldn't be valid anymore
 assert(not detected_table[1].valid)
-LLEvents:off("touch_start", LLEvents:listeners("touch_start")[1])
+LLEvents:off("touch_start", LLEvents:handlers("touch_start")[1])
 
 -- Once handler with handleEvent
 local once_call_count = 0
@@ -93,10 +93,10 @@ local once_test_handler = LLEvents:once("listen", function(...)
     once_args = table.pack(...)
 end)
 
-assert(#LLEvents:listeners("listen") == 1)
+assert(#LLEvents:handlers("listen") == 1)
 LLEvents:_handleEvent("listen", 0, "test", "key", "msg")
 assert(once_call_count == 1)
-assert(#LLEvents:listeners("listen") == 0)
+assert(#LLEvents:handlers("listen") == 0)
 assert(#once_args == 4)
 assert(once_args[4] == "msg")
 
@@ -250,7 +250,7 @@ callable_table = setmetatable({}, {
 -- Register callable table as event handler
 local callable_handler = LLEvents:on("touch_start", callable_table)
 assert(callable_handler ~= nil)
-assert(#LLEvents:listeners("touch_start") == 1)
+assert(#LLEvents:handlers("touch_start") == 1)
 
 -- Trigger event
 LLEvents:_handleEvent("touch_start", 2)
@@ -263,7 +263,7 @@ assert(callable_count == 2)
 -- Test unregistering by passing the same table reference
 local off_result = LLEvents:off("touch_start", callable_table)
 assert(off_result == true)
-assert(#LLEvents:listeners("touch_start") == 0)
+assert(#LLEvents:handlers("touch_start") == 0)
 
 -- Verify handler no longer fires
 LLEvents:_handleEvent("touch_start", 2)
@@ -291,5 +291,17 @@ while true do
 end
 
 assert(lljson.encode(yield_order) == "[1,2]")
+
+-- Make sure that the :adjustDamage()
+local damage_triggered = false
+LLEvents:once('on_damage', function(detected)
+    local ev = detected[5]
+    -- Just check that this doesn't fail
+    ev:adjustDamage(0)
+    assert(ev.canAdjustDamage == true)
+    damage_triggered = true
+end)
+LLEvents:_handleEvent("on_damage", 7)
+assert(damage_triggered)
 
 return 'OK'

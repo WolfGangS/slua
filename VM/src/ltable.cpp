@@ -406,6 +406,34 @@ static void setarrayvector(lua_State* L, LuaTable* t, int size)
     t->sizearray = size;
 }
 
+// ServerLua: Time for dirty tricks to make it so we can treat this as if it's
+//  realloc-like from a user's perspective. If we create a new array while `t->node`
+//  is still reachable from the root, the user temporarily needs enough memory for
+//  both the original node vector and its new version.
+struct NodeUnrooter
+{
+    LuaTable *mT;
+    LuaNode *mOrigNode;
+    int mOrigSize;
+
+    NodeUnrooter(LuaTable *t): mT(t), mOrigNode(t->node), mOrigSize(t->lsizenode)
+    {
+        t->node = cast_to(LuaNode*, dummynode);
+        t->lsizenode = 0;
+    }
+    ~NodeUnrooter()
+    {
+        // If it's still dummynode, then we probably threw when allocating.
+        // We would certainly never get `dummynode` back from `luaM_newarray()`.
+        // Put the original size and nodes back so we're exception-safe.
+        if (mT->node == dummynode)
+        {
+            mT->lsizenode = mOrigSize;
+            mT->node = mOrigNode;
+        }
+    }
+};
+
 static void setnodevector(lua_State* L, LuaTable* t, int size)
 {
     int lsize;
@@ -421,7 +449,14 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
         if (lsize > MAXBITS)
             luaG_runerror(L, "table overflow");
         size = twoto(lsize);
-        t->node = luaM_newarray(L, size, LuaNode, t->memcat);
+
+        // ServerLua: Temporarily stub out `t->node` while we create the new one,
+        // putting things back if we throw in the alloc.
+        {
+            [[maybe_unused]] NodeUnrooter _unrooter(t);
+            t->node = luaM_newarray(L, size, LuaNode, t->memcat);
+        }
+
         for (i = 0; i < size; i++)
         {
             LuaNode* n = gnode(t, i);
@@ -556,7 +591,7 @@ static void rehash(lua_State* L, LuaTable* t, const TValue* ek)
 
     // ServerLua: Don't try to be conservative about array allocation size,
     //  this is a system table.
-    if (t->memcat < 2)
+    if (t->memcat < LUA_FIRST_USER_MEMCAT)
     {
         max_idx = -1;
     }
@@ -1063,17 +1098,14 @@ void luaH_overrideiterorder(lua_State* L, LuaTable* t, int override)
 }
 
 // ServerLua: shrink table to optimal size
-void luaH_shrink(lua_State* L, LuaTable* t, bool reorder)
+// If shrink_sparse=false (default), elements stay in their current part (array or hash).
+// If shrink_sparse=true, sparse array elements beyond boundary may move to hash to save memory.
+void luaH_shrink(lua_State* L, LuaTable* t, bool shrink_sparse)
 {
-    // Shrink table to reduce memory usage.
-    // If reorder=false (default), preserves iteration order by not moving elements to hash.
-    // If reorder=true, may shrink to boundary and move sparse elements to hash.
-
-    // No-op for empty tables
-    if (!t->sizearray && !t->lsizenode)
+    if (!t->sizearray && t->node == dummynode)
         return;
 
-    // Scan array: find boundary, max used index, and count sparse elements
+    // Determine array / node occupancy and sparsity
     int boundary = 0;
     int max_used_idx = 0;
     int sparse_count = 0;
@@ -1089,39 +1121,53 @@ void luaH_shrink(lua_State* L, LuaTable* t, bool reorder)
         }
     }
 
-    // Count hash elements
-    int hash_count = 0;
-    int orig_sizenode = sizenode(t);
-    for (int i = 0; i < orig_sizenode; ++i)
+    int orig_hcount = 0;
+    int orig_hcap = (t->node == dummynode) ? 0 : sizenode(t);
+    for (int i = 0; i < orig_hcap; ++i)
     {
         if (!ttisnil(gval(gnode(t, i))))
-            hash_count++;
+            orig_hcount++;
     }
 
-    // If reorder allowed and there are sparse elements, try shrinking to boundary
-    if (reorder && sparse_count > 0)
-    {
-        // We're allowed to move things to the hash part of the table, check if it would be cheaper
-        // memory-wise to do that than it would be for us to just shrink array and node to their minimum
-        // required capacities.
-        // Cost in `TValue`-equivalents: array slots cost 1, hash slots cost 2 (LuaNode is 2x TValue)
-        int new_hash_count = hash_count + sparse_count;
-        // hash portion resizes in pow2 increments, sometimes putting things in the hash is basically
-        // free if we're already using it.
-        int reorder_hash_capacity = 1 << ceillog2(new_hash_count);
-        int no_reorder_hash_capacity = hash_count == 0 ? 0 : (1 << ceillog2(hash_count));
-        int reorder_cost = boundary + (2 * reorder_hash_capacity);
-        int no_reorder_cost = max_used_idx + (2 * no_reorder_hash_capacity);
+    // Determine ideal array / node size given our preferences
+    int target_asize = max_used_idx;
+    int target_hcount = orig_hcount;
 
-        // Would this be smaller memory-wise if we moved some things to the hash portion?
-        if (reorder_cost < no_reorder_cost)
+    // With shrink_sparse, check if moving sparse array elements to hash saves memory.
+    if (shrink_sparse && sparse_count > 0)
+    {
+        // Cost in TValue-equivalents: array slots cost 1, hash nodes cost 2 (LuaNode is 2x TValue).
+        // Hash resizes in pow2 increments, so absorbing sparse elements is sometimes free.
+        int new_hash_count = orig_hcount + sparse_count;
+        int sparse_hash_cap = 1 << ceillog2(new_hash_count);
+        int keep_hash_cap = orig_hcount == 0 ? 0 : (1 << ceillog2(orig_hcount));
+        int sparse_cost = boundary + (2 * sparse_hash_cap);
+        int keep_cost = max_used_idx + (2 * keep_hash_cap);
+
+        // Would moving these cost less than keeping them where they are?
+        if (sparse_cost < keep_cost)
         {
-            resize(L, t, boundary, new_hash_count);
-            return;
+            target_asize = boundary;
+            target_hcount = new_hash_count;
         }
     }
 
-    // Default: shrink to max_used_idx (no elements move, preserves iteration order)
-    if (max_used_idx < t->sizearray || hash_count < orig_sizenode)
-        resize(L, t, max_used_idx, hash_count);
+    int target_hcap = target_hcount == 0 ? 0 : twoto(ceillog2(target_hcount));
+
+    bool array_shrinks = target_asize < t->sizearray;
+    bool hash_shrinks = target_hcap != orig_hcap || target_hcount > orig_hcount;
+    if (hash_shrinks)
+    {
+        resize(L, t, target_asize, target_hcount);
+    }
+    else if (array_shrinks)
+    {
+        setarrayvector(L, t, target_asize);
+    }
+
+    // We have to invalidate the boundary if we've resized the array, it's end-relative
+    if (array_shrinks)
+    {
+        t->aboundary = 0;
+    }
 }

@@ -94,15 +94,24 @@ int luaSL_pushquaternion(lua_State *L, double x, double y, double z, double s)
     return 1;
 }
 
+// LSL-mode "key" constructor, which optimizes for UUID-like keys,
+// but additionally allows arbitrary strings.
 static int lsl_key_ctor(lua_State *L)
 {
-    if (lua_type(L, 1) == LUA_TUSERDATA)
+    auto arg_type = lua_type(L, 1);
+    lua_settop(L, 1);
+    if (arg_type == LUA_TUSERDATA)
     {
         // If this is already a UUID just return the same UUID.
         bool compressed;
         luaSL_checkuuid(L, 1, &compressed);
         lua_pushvalue(L, 1);
         return 1;
+    }
+    if (arg_type != LUA_TSTRING)
+    {
+        luaL_error(L, "Failed to cast");
+        return 0;
     }
     size_t len;
     const char *data = luaL_checklstring(L, 1, &len);
@@ -113,48 +122,73 @@ static bool parse_uuid_str(const char *in_string, size_t len, char *out, bool fl
 static int push_uuid_common(lua_State *L, const char *str, size_t len, bool compressed);
 
 // UUID constructor for Lua/SLua mode (strict + canonicalize)
-static int lua_uuid_ctor(lua_State *L)
+static bool _lsl_uuid_inner_ctor(lua_State *L)
 {
     auto arg_type = lua_type(L, 1);
+    lua_settop(L, 1);
     if (arg_type == LUA_TUSERDATA)
     {
         // If this is already a UUID just return the same UUID.
-        bool compressed;
-        luaSL_checkuuid(L, 1, &compressed);
-        lua_pushvalue(L, 1);
-        return 1;
+        if (lua_userdatatag(L, 1) == UTAG_UUID)
+        {
+            lua_pushvalue(L, 1);
+            return true;
+        }
+        return false;
     }
     else if (arg_type == LUA_TBUFFER)
     {
         size_t buf_len = 0;
         auto *data = lua_tobuffer(L, 1, &buf_len);
         if (data && buf_len >= (size_t)UUID_BYTES)
-            return push_uuid_common(L, (const char*)data, UUID_BYTES, true);
-        luaL_errorL(L, "Buffer too short to be UUID, only %d bytes", (int)buf_len);
+        {
+            push_uuid_common(L, (const char*)data, UUID_BYTES, true);
+            return true;
+        }
+        return false;
+    }
+    else if (arg_type != LUA_TSTRING)
+    {
+        return false;
     }
 
     size_t len;
-    const char *data = luaL_checklstring(L, 1, &len);
+    const char *data = lua_tolstring(L, 1, &len);
 
     // Empty string → NULL_KEY
     if (len == 0)
     {
-        return push_uuid_common(L, NULL_UUID, UUID_BYTES, true);
+        push_uuid_common(L, NULL_UUID, UUID_BYTES, true);
+        return true;
     }
 
     // Try flexible parsing (case-insensitive + broken format)
     char uuid_bytes[UUID_BYTES];
     if (parse_uuid_str(data, len, uuid_bytes, true))
     {
-        // Valid UUID → compressed binary
-        return push_uuid_common(L, uuid_bytes, UUID_BYTES, true);
+        // Valid UUID -> compressed binary
+        push_uuid_common(L, uuid_bytes, UUID_BYTES, true);
+        return true;
     }
-    else
+    return false;
+}
+static int lua_uuid_ctor(lua_State *L)
+{
+    if (!_lsl_uuid_inner_ctor(L))
     {
-        // Invalid UUID → nil
-        lua_pushnil(L);
+        luaL_argerrorL(L, 1, "Unable to convert to UUID");
+    }
+    return 1;
+}
+
+static int lua_touuid(lua_State *L)
+{
+    if (_lsl_uuid_inner_ctor(L))
+    {
         return 1;
     }
+    lua_pushnil(L);
+    return 1;
 }
 
 static std::string _float_to_str(float v, bool high_precision, bool neg_zero = true)
@@ -373,6 +407,7 @@ static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool ni
                             return 1;
                         }
                         memset(quat, 0, sizeof(float) * 4);
+                        quat[3] = 1.0f;
                     }
                     luaSL_pushquaternion(L, quat[0], quat[1], quat[2], quat[3]);
                     return 1;
@@ -533,11 +568,11 @@ static int lsl_must_cast(lua_State *L)
     return 1;
 }
 
-static int lsl_must_cast_nil_default(lua_State *L)
+static int lsl_try_cast_nil_default(lua_State *L)
 {
     if (_lsl_cast_internal(L, false, true, true) != 1)
     {
-        luaL_errorL(L, "unable to cast!");
+        lua_pushnil(L);
     }
     return 1;
 }
@@ -563,6 +598,7 @@ static int lsl_table_concat(lua_State *L)
     if (lua_type(L, 1) != LUA_TTABLE && lua_type(L, 2) != LUA_TTABLE)
         luaL_errorL(L, "At least one argument must be a table");
 
+    lua_settop(L, 2);
     lua_checkstack(L, 4);
 
     // Note: reversed because of LSL evaluation order!
@@ -1029,11 +1065,12 @@ static int lsl_tostring_quat(lua_State *L)
     if (a == nullptr)
         luaL_typeerror(L, 1, "quaternion");
 
-    char buf[128] = {};
+    char buf[256] = {};
     char* p = buf;
     *p++ = '<';
 
-    const char* format = LUAU_IS_LSL_VM(L) ? "%5.5f" : "%.6g";
+    bool is_lsl = LUAU_IS_LSL_VM(L);
+    const char* format = is_lsl ? "%5.5f" : "%.6f";
     for (int i = 0; i < 4; i++)
     {
         if (i > 0)
@@ -1041,7 +1078,10 @@ static int lsl_tostring_quat(lua_State *L)
             *p++ = ',';
             *p++ = ' ';
         }
-        p += luai_formatfloat(p, buf + sizeof(buf) - p, format, a[i]);
+        int n = luai_formatfloat(p, buf + sizeof(buf) - p, format, a[i]);
+        if (!is_lsl)
+            n = luai_trimfloat(p, n);
+        p += n;
     }
 
     *p++ = '>';
@@ -1139,7 +1179,7 @@ static int push_uuid_common(lua_State *L, const char *str, size_t len, bool comp
         // the script's reference graph before
         auto *uuid_tval = luaA_toobject(L, -1);
         auto *g = L->global;
-        if (LUAU_LIKELY(!!g->cb.beforeallocate) && L->activememcat > 1 && gcvalue(uuid_tval)->gch.memcat > 1)
+        if (LUAU_LIKELY(!!g->cb.beforeallocate) && L->activememcat >= LUA_FIRST_USER_MEMCAT && gcvalue(uuid_tval)->gch.memcat >= LUA_FIRST_USER_MEMCAT)
         {
             // See `lgctraverse.cpp` for reasoning behind this
             const size_t uuid_size = 4;
@@ -1226,7 +1266,7 @@ static int lsl_to_vector(lua_State *L)
     luaL_checkany(L, 1);
     lua_settop(L, 1);
     lua_pushunsigned(L, (unsigned int)LSLIType::LST_VECTOR);
-    return lsl_must_cast_nil_default(L);
+    return lsl_try_cast_nil_default(L);
 }
 
 static int lsl_to_quaternion(lua_State *L)
@@ -1234,7 +1274,7 @@ static int lsl_to_quaternion(lua_State *L)
     luaL_checkany(L, 1);
     lua_settop(L, 1);
     lua_pushunsigned(L, (unsigned int)LSLIType::LST_QUATERNION);
-    return lsl_must_cast_nil_default(L);
+    return lsl_try_cast_nil_default(L);
 }
 
 const char *luaSL_checkuuid(lua_State *L, int num_arg, bool *compressed)
@@ -1437,34 +1477,52 @@ static inline float quaternion_dot(const float* a, const float* b) {
 constexpr float ONE_PART_IN_A_MILLION = 0.000001f;
 constexpr float FP_MAG_THRESHOLD = 0.0000001f;
 
-static int lua_quaternion_normalize(lua_State *L)
+// This logic largely copied from indra
+static inline void normalize_quaternion(const float* in, float* out)
 {
-    const float* quat = luaSL_checkquaternion(L, 1);
-    // This logic largely copied from indra
-    float mag = sqrtf(quaternion_dot(quat, quat));
+    float mag = sqrtf(quaternion_dot(in, in));
     if (mag > FP_MAG_THRESHOLD)
     {
         // Floating point error can prevent some quaternions from achieving
         // exact unity length.  When trying to renormalize such quaternions we
         // can oscillate between multiple quantized states. To prevent such
         // drifts we only renormalize if the length is far enough from unity.
-        if (fabs(1.f - mag) > ONE_PART_IN_A_MILLION)
+        if (fabsf(1.f - mag) > ONE_PART_IN_A_MILLION)
         {
             float oomag = 1.0f / mag;
-            luaSL_pushquaternion(L, quat[0] * oomag, quat[1] * oomag, quat[2] * oomag, quat[3] * oomag);
+            out[0] = in[0] * oomag;
+            out[1] = in[1] * oomag;
+            out[2] = in[2] * oomag;
+            out[3] = in[3] * oomag;
         }
         else
         {
-            // We don't normalize in this case in indra, so push the original input
-            lua_pushvalue(L, 1);
+            out[0] = in[0];
+            out[1] = in[1];
+            out[2] = in[2];
+            out[3] = in[3];
         }
     }
     else
     {
         // We were given a very bad quaternion so we set it to identity
-        luaSL_pushquaternion(L, 0, 0, 0, 1);
+        out[0] = 0.0f;
+        out[1] = 0.0f;
+        out[2] = 0.0f;
+        out[3] = 1.0f;
     }
+}
 
+static int lua_quaternion_normalize(lua_State *L)
+{
+    const float* quat = luaSL_checkquaternion(L, 1);
+    float res[4];
+    normalize_quaternion(quat, res);
+    // We don't normalize in this case in indra, so push the original input
+    if (res[0] == quat[0] && res[1] == quat[1] && res[2] == quat[2] && res[3] == quat[3])
+        lua_pushvalue(L, 1);
+    else
+        luaSL_pushquaternion(L, res[0], res[1], res[2], res[3]);
     return 1;
 }
 
@@ -1537,10 +1595,11 @@ static int lua_quaternion_conjugate(lua_State *L)
 
 static inline void push_rotated_vector(lua_State *L, const float* vec) {
     const float* quat = luaSL_checkquaternion(L, 1);
+    float nquat[4];
+    normalize_quaternion(quat, nquat);
     float res[3] = {0.0f};
-    rot_vec(vec, quat, res);
-    float invSqrt = 1.0f / sqrtf(res[0] * res[0] + res[1] * res[1] + res[2] * res[2]);
-    lua_pushvector(L, res[0] * invSqrt, res[1] * invSqrt, res[2] * invSqrt);
+    rot_vec(vec, nquat, res);
+    lua_pushvector(L, res[0], res[1], res[2]);
 }
 
 static int lua_quaternion_tofwd(lua_State *L)
@@ -1589,7 +1648,8 @@ int luaopen_sl_quaternion(lua_State* L, const char* name)
     // ServerLua: `quaternion()` is an alias to `quaternion.create()`, so we need to add a metatable
     //  to the quaternion module which allows calling it.
     lua_newtable(L);
-    lua_pushcfunction(L, quaternion_call, "__call");
+    // Not conventional to not call this "__call", but this'll give better error messages.
+    lua_pushcfunction(L, quaternion_call, name);
     lua_setfield(L, -2, "__call");
 
     // We need to override __iter so generalized iteration doesn't try to use __call.
@@ -1613,6 +1673,7 @@ int luaopen_sl_quaternion(lua_State* L, const char* name)
 // ServerLua: callable uuid module
 static int uuid_call(lua_State *L)
 {
+    // First arg will be the uuid table, throw it away and call the usual constructor.
     luaL_checktype(L, 1, LUA_TTABLE);
     lua_remove(L, 1);
     return lua_uuid_ctor(L);
@@ -1632,7 +1693,7 @@ int luaopen_sl_uuid(lua_State* L)
     // ServerLua: `uuid()` is an alias to `uuid.create()`, so we need to add a metatable
     //  to the uuid module which allows calling it.
     lua_newtable(L);
-    lua_pushcfunction(L, uuid_call, "__call");
+    lua_pushcfunction(L, uuid_call, "uuid");
     lua_setfield(L, -2, "__call");
 
     // We need to override __iter so generalized iteration doesn't try to use __call.
@@ -1663,15 +1724,6 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
     int top = lua_gettop(L);
 
     // Load these into the global namespace
-
-    if (LUAU_IS_LSL_VM(L))
-    {
-        lua_pushcfunction(L, lsl_key_ctor, "uuid");
-        luau_dupcclosure(L, -1, "touuid");
-        lua_setglobal(L, "touuid");
-        lua_setglobal(L, "uuid");
-    }
-
     lua_pushcfunction(L, lsl_to_vector, "tovector");
     lua_setglobal(L, "tovector");
 
@@ -1731,12 +1783,19 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
     lua_pop(L, 1);
     LUAU_ASSERT(lua_gettop(L) == top);
 
-    if (!LUAU_IS_LSL_VM(L))
+    if (LUAU_IS_LSL_VM(L))
+    {
+        lua_pushcfunction(L, lsl_key_ctor, "uuid");
+        luau_dupcclosure(L, -1, "touuid");
+        lua_setglobal(L, "touuid");
+        lua_setglobal(L, "uuid");
+    }
+    else
     {
         // Create uuid module table
         luaopen_sl_uuid(L);
         LUAU_ASSERT(lua_gettop(L) == top);
-        lua_pushcfunction(L, lua_uuid_ctor, "touuid");
+        lua_pushcfunction(L, lua_touuid, "touuid");
         lua_setglobal(L, "touuid");
     }
 

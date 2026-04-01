@@ -55,11 +55,12 @@ assert(uuid(uuid("00000000-0000-0000-0000-00000000000a")).istruthy)
 -- This is an integer in LSL, should be a float in Lua
 assert(typeof(ll.Ceil(5)) == "number")
 
--- These should all fail gracefully
-success, err = pcall(function() tovector(tovector) end)
-assert(string.match(err, "unable to cast!"))
-success, err = pcall(function() tovector(nil) end)
-assert(string.match(err, "unable to cast!"))
+-- These should all return nil gracefully
+assert(tovector(tovector) == nil)
+assert(tovector(nil) == nil)
+assert(toquaternion(nil) == nil)
+assert(touuid(nil) == nil)
+assert(touuid(ZERO_ROTATION) == nil)
 
 assert(not pcall(function() tovector() end))
 assert(not pcall(function() toquaternion() end))

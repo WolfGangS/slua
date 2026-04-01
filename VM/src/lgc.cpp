@@ -366,7 +366,7 @@ static int traversetable(global_State* g, LuaTable* h)
                 markvalue(g, gkey(n));
             }
             // ServerLua: Mark UUIDs in user weak tables during traversal (value semantics)
-            else if (h->memcat > 1 && ttisuserdata(gkey(n)))
+            else if (h->memcat >= LUA_FIRST_USER_MEMCAT && ttisuserdata(gkey(n)))
             {
                 GCObject* key = gcvalue(gkey(n));
                 if (key->gch.tt == LUA_TUSERDATA && gco2u(key)->tag == UTAG_UUID)
@@ -378,7 +378,7 @@ static int traversetable(global_State* g, LuaTable* h)
                 markvalue(g, gval(n));
             }
             // ServerLua: Mark UUIDs in user weak tables during traversal (value semantics)
-            else if (h->memcat > 1 && ttisuserdata(gval(n)))
+            else if (h->memcat >= LUA_FIRST_USER_MEMCAT && ttisuserdata(gval(n)))
             {
                 GCObject* val = gcvalue(gval(n));
                 if (val->gch.tt == LUA_TUSERDATA && gco2u(val)->tag == UTAG_UUID)
@@ -479,11 +479,11 @@ static void shrinkstack(lua_State* L)
 
     if (3 * size_t(ci_used) < size_t(L->size_ci) && 2 * BASIC_CI_SIZE < L->size_ci)
         luaD_reallocCI(L, L->size_ci / 2); // still big enough...
-    condhardstacktests(luaD_reallocCI(L, ci_used + 1));
+    condhardstacktests(luaD_reallocCI(L, ci_used + 1), 1);
 
     if (3 * size_t(s_used) < size_t(L->stacksize) && 2 * (BASIC_STACK_SIZE + EXTRA_STACK) < L->stacksize)
         luaD_reallocstack(L, L->stacksize / 2, 0); // still big enough...
-    condhardstacktests(luaD_reallocstack(L, s_used, 0));
+    condhardstacktests(luaD_reallocstack(L, s_used, 0), 1);
 }
 
 static void shrinkstackprotected(lua_State* L)
@@ -599,8 +599,8 @@ static int isobjcleared(GCObject* o, uint8_t tablememcat)
         return 0;
     }
 
-    // ServerLua: UUIDs in user-created weak tables (memcat > 1) get value semantics
-    if (tablememcat > 1 && o->gch.tt == LUA_TUSERDATA && gco2u(o)->tag == UTAG_UUID)
+    // ServerLua: UUIDs in user-created weak tables get value semantics
+    if (tablememcat >= LUA_FIRST_USER_MEMCAT && o->gch.tt == LUA_TUSERDATA && gco2u(o)->tag == UTAG_UUID)
     {
         stringmark(&o->u); // UUIDs are `values', so are never weak
         return 0;

@@ -28,6 +28,16 @@ assert(`{quaternion.tofwd(yaw_ninety)}` == "<0, 1, 0>")
 assert(`{quaternion.toleft(yaw_ninety)}` == "<-1, 0, 0>")
 assert(`{quaternion.toup(yaw_ninety)}` == "<0, 0, 1>")
 
+-- Zero quaternion normalizes to identity before rotation (matches server)
+assert(`{quaternion.tofwd(quaternion(0, 0, 0, 0))}` == "<1, 0, 0>")
+assert(`{quaternion.toleft(quaternion(0, 0, 0, 0))}` == "<0, 1, 0>")
+assert(`{quaternion.toup(quaternion(0, 0, 0, 0))}` == "<0, 0, 1>")
+
+-- Test that tostring doesn't lose precision for large component values
+assert(`{vector(123456.5, 0, 0)}` == "<123456.5, 0, 0>")
+assert(`{vector(1000001, 0, 0)}` == "<1000001, 0, 0>")
+assert(`{quaternion(123456.5, 0, 0, 1)}` == "<123456.5, 0, 0, 1>")
+
 -- Check rotation module has same implementation as quaternion module
 for k,_ in quaternion do
     assert(rotation[k] ~= nil)

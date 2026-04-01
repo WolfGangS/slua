@@ -10,7 +10,7 @@
 #include "Luau/LSLBuiltins.h"
 #include "Luau/Parser.h"
 #include "Luau/TimeTrace.h"
-
+#include "Luau/Counters.h"
 #include "Luau/Coverage.h"
 #include "Luau/FileUtils.h"
 #include "Luau/Flags.h"
@@ -50,7 +50,7 @@
 #include <signal.h>
 
 LUAU_FASTFLAG(DebugLuauTimeTracing)
-
+LUAU_FASTFLAG(LuauCodegenCounterSupport)
 
 constexpr int MaxTraversalLimit = 50;
 
@@ -84,6 +84,11 @@ static void sigintCallback(lua_State* L, int gc)
 }
 
 static lua_State* replState = NULL;
+// ServerLua: For our fake memory tracking stuff, note that this might not
+//  be 100% representative of prod behavior, especially around `require()`
+//  and its memory side-effects.
+static lua_OpaqueGCObjectSet replFreeObjects;
+static size_t replBytecodeSize = 0;
 
 #ifdef _WIN32
 BOOL WINAPI sigintHandler(DWORD signal)
@@ -175,6 +180,26 @@ static int lua_collectgarbage(lua_State* L)
     luaL_error(L, "collectgarbage must be called with 'count' or 'collect'");
 }
 
+static int lua_graphheap_wrapper(lua_State* L)
+{
+    const char* path = luaL_checkstring(L, 1);
+    lua_graphheap(replState, path);
+    return 0;
+}
+
+static int lua_graphuserheap_wrapper(lua_State* L)
+{
+    const char* path = luaL_checkstring(L, 1);
+    lua_graphuserheap(replState, path, &replFreeObjects);
+    return 0;
+}
+
+static int lua_getusedmemory_wrapper(lua_State* L)
+{
+    lua_pushnumber(L, (double)(lua_userthreadsize(replState, &replFreeObjects) + replBytecodeSize));
+    return 1;
+}
+
 #ifdef CALLGRIND
 static int lua_callgrind(lua_State* L)
 {
@@ -230,6 +255,8 @@ void* createCliRequireContext(lua_State* L)
             return codegen;
         },
         coverageTrack,
+        countersActive,
+        countersTrack
     };
 
     // Store ReplRequirer in the registry to keep it alive for the lifetime of
@@ -265,6 +292,11 @@ void setupState(lua_State* L)
         }
         luaopen_ll(L, true);
         lua_pop(L, 1);
+
+        lua_getglobal(L, "ll");
+        lua_pushcfunction(L, lua_getusedmemory_wrapper, "ll.GetUsedMemory");
+        lua_setfield(L, -2, "GetUsedMemory");
+        lua_pop(L, 1);
         // Set the builtin constants on _G if we have any.
         luaSL_set_constant_globals(L);
     }
@@ -279,6 +311,8 @@ void setupState(lua_State* L)
     static const luaL_Reg funcs[] = {
         {"loadstring", lua_loadstring},
         {"collectgarbage", lua_collectgarbage},
+        {"graphheap", lua_graphheap_wrapper},
+        {"graphuserheap", lua_graphuserheap_wrapper},
 #ifdef CALLGRIND
         {"callgrind", lua_callgrind},
 #endif
@@ -659,26 +693,16 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
         return false;
     }
 
-    lua_setmemcat(GL, 2);
+    lua_setmemcat(GL, LUA_FIRST_USER_MEMCAT);
 
     // module needs to run in a new thread, isolated from the rest
     lua_State* L = lua_newthread(GL);
+    replState = L;
 
     lua_setmemcat(GL, 0);
 
     // new thread needs to have the globals sandboxed
     luaL_sandboxthread(L);
-
-    if (sl)
-    {
-        luaSL_createeventmanager(L);
-        lua_ref(L, -1);
-        lua_pushvalue(L, -1);
-        lua_setglobal(L, "LLEvents");
-        luaSL_createtimermanager(L);
-        lua_ref(L, -1);
-        lua_setglobal(L, "LLTimers");
-    }
 
     std::string chunkname = "@" + normalizePath(name);
 
@@ -703,18 +727,36 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
     }
     int status = 0;
 
-    lua_setmemcat(L, 0);
     if (luau_load(L, chunkname.c_str(), bytecode.data(), bytecode.size(), 0) == 0)
     {
-        lua_setmemcat(L, 2);
+        replFreeObjects = lua_collectfreeobjects(L);
+        replBytecodeSize = bytecode.size();
+
+        if (sl)
+        {
+            luaSL_createeventmanager(L);
+            lua_ref(L, -1);
+            lua_pushvalue(L, -1);
+            lua_setglobal(L, "LLEvents");
+            luaSL_createtimermanager(L);
+            lua_ref(L, -1);
+            lua_setglobal(L, "LLTimers");
+        }
         if (codegen)
         {
             Luau::CodeGen::CompilationOptions nativeOptions;
+
+            if (countersActive())
+                nativeOptions.recordCounters = true;
+
             Luau::CodeGen::compile(L, -1, nativeOptions);
         }
 
         if (coverageActive())
             coverageTrack(L, -1);
+
+        if (countersActive())
+            countersTrack(L, -1);
 
         setupArguments(L, program_argc, program_argv);
         status = lua_resume(L, NULL, program_argc);
@@ -766,6 +808,7 @@ static void displayHelp(const char* argv0)
     printf("\n");
     printf("Available options:\n");
     printf("  --coverage: collect code coverage while running the code and output results to coverage.out\n");
+    printf("  --counters: collect native counters data while running the code and output results to callgrind.out\n");
     printf("  -h, --help: Display this usage message.\n");
     printf("  -i, --interactive: Run an interactive REPL after executing the last script specified.\n");
     printf("  -O<n>: compile with optimization level n (default 1, n should be between 0 and 2).\n");
@@ -796,6 +839,7 @@ int replMain(int argc, char** argv)
     bool coverage = false;
     bool interactive = false;
     bool codegenPerf = false;
+    bool counters = false;
     int program_args = argc;
 
     for (int i = 1; i < argc; i++)
@@ -849,6 +893,11 @@ int replMain(int argc, char** argv)
         else if (strcmp(argv[i], "--coverage") == 0)
         {
             coverage = true;
+        }
+        else if (strcmp(argv[i], "--counters") == 0)
+        {
+            counters = true;
+            FFlag::LuauCodegenCounterSupport.value = true;
         }
         else if (strcmp(argv[i], "--timetrace") == 0)
         {
@@ -951,6 +1000,9 @@ int replMain(int argc, char** argv)
         if (coverage)
             coverageInit(L);
 
+        if (counters)
+            countersInit(L);
+
         int failed = 0;
 
         for (size_t i = 0; i < files.size(); ++i)
@@ -967,6 +1019,9 @@ int replMain(int argc, char** argv)
 
         if (coverage)
             coverageDump("coverage.out");
+
+        if (counters)
+            countersDump("callgrind.out");
 
         return failed ? 1 : 0;
     }
