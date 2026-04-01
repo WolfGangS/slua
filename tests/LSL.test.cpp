@@ -1082,9 +1082,13 @@ TEST_CASE("Integer MulAssign Float Valid Contexts")
     runConformance("mul_assign_valid.lsl");
 }
 
-TEST_CASE("Integer Division By Zero Error")
+TEST_CASE("Division By Zero Error")
 {
     runConformance("div_by_zero.lsl", nullptr, nullptr, nullptr, "Math error");
+    runConformance("float_div_by_zero.lsl", nullptr, nullptr, nullptr, "Math error");
+    runConformance("vector_div_by_zero.lsl", nullptr, nullptr, nullptr, "Math error");
+    runConformance("zero_vector_div_by_zero.lsl", nullptr, nullptr, nullptr, "Math error");
+    runConformance("inf_div_inf.lsl", nullptr, nullptr, nullptr, "Math error");
 }
 
 TEST_CASE("Mono Strings")

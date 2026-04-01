@@ -208,7 +208,7 @@ inline bool luau_skipstep(uint8_t op)
 }
 
 
-static const char * const MATH_ERROR_STR = "Math error: division or modulus (possibly by 0) resulted in NaN";
+static const char * const MATH_ERROR_STR = "Math error: division or modulus by 0";
 
 template<bool SingleStep>
 static void luau_execute(lua_State* L)
@@ -1774,9 +1774,8 @@ reentry:
                     // ServerLua: ints not represented in here, they only support idiv.
                     const double res = nvalue(rb) / nvalue(rc);
 
-                    // ServerLua: Any division that results in NaN is an error under Mono
-                    // Generally this is div by zero, but there might be others.
-                    if (LUAU_UNLIKELY(LUAU_IS_LSL_VM(L) && std::isnan(res)))
+                    // ServerLua: In LSL (Mono), division by zero or a NaN result is an error.
+                    if (LUAU_UNLIKELY(LUAU_IS_LSL_VM(L) && (nvalue(rc) == 0.0 || std::isnan(res))))
                     {
                         // VM protection is necessary here because PC may be invalid if we've
                         // not called `VM_PROTECT()` in this function yet.
@@ -2092,12 +2091,26 @@ reentry:
                 // fast-path
                 if (LUAU_LIKELY(ttisnumber(rb)))
                 {
-                    setnvalue(ra, nvalue(rb) / nvalue(kv));
+                    const double res = nvalue(rb) / nvalue(kv);
+
+                    // ServerLua: In LSL (Mono), division by zero or a NaN result is an error.
+                    if (LUAU_UNLIKELY(LUAU_IS_LSL_VM(L) && (nvalue(kv) == 0.0 || std::isnan(res))))
+                    {
+                        VM_PROTECT(luaG_runerrorL(L, MATH_ERROR_STR));
+                    }
+
+                    setnvalue(ra, res);
                     VM_NEXT();
                 }
                 // ServerLua: int intentionally not handled, it uses idivk
                 else if (ttisvector(rb))
                 {
+                    // ServerLua: In LSL (Mono), vector division by zero is a runtime error.
+                    if (LUAU_UNLIKELY(LUAU_IS_LSL_VM(L) && nvalue(kv) == 0.0))
+                    {
+                        VM_PROTECT(luaG_runerrorL(L, MATH_ERROR_STR));
+                    }
+
                     const float* vb = vvalue(rb);
                     float nc = cast_to(float, nvalue(kv));
                     setvvalue(ra, vb[0] / nc, vb[1] / nc, vb[2] / nc, vb[3] / nc);
@@ -3113,7 +3126,15 @@ reentry:
                 // fast-path
                 if (LUAU_LIKELY(ttisnumber(rc)))
                 {
-                    setnvalue(ra, nvalue(kv) / nvalue(rc));
+                    const double res = nvalue(kv) / nvalue(rc);
+
+                    // ServerLua: In LSL (Mono), division by zero or a NaN result is an error.
+                    if (LUAU_UNLIKELY(LUAU_IS_LSL_VM(L) && (nvalue(rc) == 0.0 || std::isnan(res))))
+                    {
+                        VM_PROTECT(luaG_runerrorL(L, MATH_ERROR_STR));
+                    }
+
+                    setnvalue(ra, res);
                     VM_NEXT();
                 }
                 else if (ttisvector(rc))
