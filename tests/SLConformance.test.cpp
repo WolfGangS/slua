@@ -421,19 +421,38 @@ TEST_CASE("UUID interning")
     lua_getref(L, runtime_state->uuidCompressedWeakTab);
     require_weak_uuid_counts(L, weak_idx, 0, 0);
 
+    // In SLua mode, pushing an invalid UUID string should return nil
+    luaSL_pushuuidstring(L, "foo");
+    REQUIRE(lua_isnil(L, -1));
+    lua_pop(L, 1);
+    require_weak_uuid_counts(L, weak_idx, 0, 0);
+
+    // In SLua mode, empty string normalizes to compressed NULL_KEY.
+    // Test interning: push twice, verify same interned object.
     for (int i=0; i<2; ++i)
     {
-        luaSL_pushuuidstring(L, "foo");
+        luaSL_pushuuidstring(L, "");
     }
 
     // These should have the same pointer identity
     REQUIRE_EQ(luaA_toobject(L, -1)->value.gc, luaA_toobject(L, -2)->value.gc);
 
-    require_weak_uuid_counts(L, weak_idx, 1, 0);
+    // Should be compressed (normalized to NULL_KEY)
+    lua_LSLUUID *empty_uuid = (lua_LSLUUID*)lua_touserdatatagged(L, -1, UTAG_UUID);
+    REQUIRE(empty_uuid != nullptr);
+    REQUIRE(empty_uuid->compressed);
+
+    // Should be the same interned object as pushing null bytes directly
+    static const uint8_t null_bytes[16] = {0};
+    luaSL_pushuuidbytes(L, null_bytes);
+    REQUIRE_EQ(luaA_toobject(L, -1)->value.gc, luaA_toobject(L, -2)->value.gc);
+    lua_pop(L, 1); // pop the bytes-pushed copy
+
+    require_weak_uuid_counts(L, weak_idx, 0, 1);
     // Pop off the newest copy, run a GC and then check that this assertion still holds.
     lua_pop(L, 1);
     lua_gc(L, LUA_GCCOLLECT, 0);
-    require_weak_uuid_counts(L, weak_idx, 1, 0);
+    require_weak_uuid_counts(L, weak_idx, 0, 1);
 
     // It's okay to release it once there are no more reachable instances
     lua_pop(L, 1);
@@ -460,18 +479,14 @@ TEST_CASE("UUID interning")
     lua_gc(L, LUA_GCCOLLECT, 0);
     require_weak_uuid_counts(L, weak_idx, 0, 0);
 
-    // Push a UUID as well as its binary form. These should result in separate instances
-    // even though they have the same underlying string value. one is compressed and
-    // one is not, but has the same literal bytes as the backing str.
+    // Push a UUID from string and from bytes. In SLua mode, both are compressed
+    // and should be interned to the same object.
     luaSL_pushuuidstring(L, "12345678-9abc-def0-1234-56789abcdef0");
-    luaSL_pushuuidlstring(L, "\x12\x34\x56\x78\x9a\xbc\xde\xf0\x12\x34\x56\x78\x9a\xbc\xde\xf0", 16);
+    luaSL_pushuuidbytes(L, (const uint8_t *)"\x12\x34\x56\x78\x9a\xbc\xde\xf0\x12\x34\x56\x78\x9a\xbc\xde\xf0");
 
-    require_weak_uuid_counts(L, weak_idx, 1, 1);
+    require_weak_uuid_counts(L, weak_idx, 0, 1);
 
-    lua_LSLUUID *bin_uuid = (lua_LSLUUID*)lua_touserdatatagged(L, -1, UTAG_UUID);
-    lua_LSLUUID *real_uuid = (lua_LSLUUID*)lua_touserdatatagged(L, -2, UTAG_UUID);
-    REQUIRE_NE(bin_uuid, real_uuid);
-    REQUIRE_EQ(bin_uuid->str, real_uuid->str);
+    REQUIRE_EQ(luaA_toobject(L, -1)->value.gc, luaA_toobject(L, -2)->value.gc);
 
     lua_pop(L, 1);
     lua_gc(L, LUA_GCCOLLECT, 0);

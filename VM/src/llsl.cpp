@@ -1242,10 +1242,20 @@ int luaSL_pushuuidlstring(lua_State *L, const char *str, size_t len)
     {
         return push_uuid_common(L, (char *)&uuid_bytes, UUID_BYTES, true);
     }
-    else
+
+    // In SLua mode, only valid UUIDs and empty strings are accepted.
+    // Empty string normalizes to NULL_KEY, anything else returns nil.
+    if (!LUAU_IS_LSL_VM(L))
     {
-        return push_uuid_common(L, str, len, false);
+        if (len == 0)
+            return push_uuid_common(L, NULL_UUID, UUID_BYTES, true);
+        lua_pushnil(L);
+        return 1;
     }
+
+    // LSL mode: allow arbitrary strings as keys (uncompressed).
+    // (key)"" is distinct from NULL_KEY in LSL.
+    return push_uuid_common(L, str, len, false);
 }
 
 int luaSL_pushuuidstring(lua_State *L, const char *str)

@@ -236,10 +236,18 @@ static int ll_list2key(lua_State *L)
     // In SLua mode, reject uncompressed (invalid) UUIDs and return NULL_KEY
     if (!LUAU_IS_LSL_VM(L))
     {
-        bool compressed;
-        luaSL_checkuuid(L, -1, &compressed);
-        if (!compressed)
+        if (lua_isnil(L, -1))
+        {
+            lua_pop(L, 1);
             push_error_key(L);
+        }
+        else
+        {
+            bool compressed;
+            luaSL_checkuuid(L, -1, &compressed);
+            if (!compressed)
+                push_error_key(L);
+        }
     }
     return 1;
 }

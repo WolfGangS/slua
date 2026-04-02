@@ -1119,4 +1119,84 @@ TEST_CASE("Mono Strings")
     CHECK_EQ("<>", mono_to_lower_string(std::string("<\x00>", 3)));
 }
 
+static int get_num_table_keys(lua_State *L, int idx)
+{
+    lua_pushnil(L);
+    int num = 0;
+    while(lua_next(L, idx))
+    {
+        ++num;
+        lua_pop(L, 1);
+    }
+    return num;
+}
+
+#define require_weak_uuid_counts(L, start_idx, num_irregular, num_compressed) \
+do { \
+CHECK_EQ(get_num_table_keys(L, (start_idx)), (num_irregular)); \
+CHECK_EQ(get_num_table_keys(L, (start_idx) + 1), (num_compressed)); \
+} while (0)
+
+TEST_CASE("UUID interning (LSL)")
+{
+    auto state = runConformance("nothing.lsl");
+    lua_State *L = lua_tothread(state.get(), 1);
+    REQUIRE(L);
+    lua_gc(L, LUA_GCCOLLECT, 0);
+
+    auto *runtime_state = (RuntimeState *)L->userdata;
+
+    int weak_idx = lua_gettop(L) + 1;
+    lua_getref(L, runtime_state->uuidWeakTab);
+    lua_getref(L, runtime_state->uuidCompressedWeakTab);
+    require_weak_uuid_counts(L, weak_idx, 0, 0);
+
+    // In LSL mode, arbitrary strings are allowed as uncompressed keys
+    for (int i=0; i<2; ++i)
+    {
+        luaSL_pushuuidstring(L, "foo");
+    }
+
+    // These should have the same pointer identity
+    CHECK_EQ(luaA_toobject(L, -1)->value.gc, luaA_toobject(L, -2)->value.gc);
+
+    require_weak_uuid_counts(L, weak_idx, 1, 0);
+    // Pop off the newest copy, run a GC and then check that this assertion still holds.
+    lua_pop(L, 1);
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    require_weak_uuid_counts(L, weak_idx, 1, 0);
+
+    // It's okay to release it once there are no more reachable instances
+    lua_pop(L, 1);
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    require_weak_uuid_counts(L, weak_idx, 0, 0);
+
+    // Push a UUID as well as its binary form. These should result in separate instances
+    // even though they have the same underlying string value. one is compressed and
+    // one is not, but has the same literal bytes as the backing str.
+    luaSL_pushuuidstring(L, "12345678-9abc-def0-1234-56789abcdef0");
+    luaSL_pushuuidlstring(L, "\x12\x34\x56\x78\x9a\xbc\xde\xf0\x12\x34\x56\x78\x9a\xbc\xde\xf0", 16);
+
+    require_weak_uuid_counts(L, weak_idx, 1, 1);
+
+    lua_LSLUUID *bin_uuid = (lua_LSLUUID*)lua_touserdatatagged(L, -1, UTAG_UUID);
+    lua_LSLUUID *real_uuid = (lua_LSLUUID*)lua_touserdatatagged(L, -2, UTAG_UUID);
+    CHECK_NE(bin_uuid, real_uuid);
+    CHECK_EQ(bin_uuid->str, real_uuid->str);
+
+    lua_pop(L, 1);
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    require_weak_uuid_counts(L, weak_idx, 0, 1);
+    lua_pop(L, 1);
+    lua_gc(L, LUA_GCCOLLECT, 0);
+
+    // In LSL mode, empty string stays uncompressed — (key)"" is distinct from NULL_KEY
+    luaSL_pushuuidstring(L, "");
+    lua_LSLUUID *empty_uuid = (lua_LSLUUID*)lua_touserdatatagged(L, -1, UTAG_UUID);
+    CHECK(empty_uuid != nullptr);
+    CHECK(!empty_uuid->compressed);
+    lua_pop(L, 1);
+    lua_gc(L, LUA_GCCOLLECT, 0);
+}
+
 TEST_SUITE_END();
