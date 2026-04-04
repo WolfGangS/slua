@@ -544,4 +544,27 @@ do
   end)
 end
 
+-- ==========================================================================
+-- table.find yieldability tests
+-- ==========================================================================
+
+-- Yield checks only fire for table/userdata search values (equalobj short-circuits
+-- on ttype mismatch for primitives, so __eq is unreachable and no yield needed).
+local find_mt = { __eq = function(a, b) return a[1] == b[1] end }
+local function fwrap(x) return setmetatable({x}, find_mt) end
+
+-- interrupt-driven yield: found, not-found, init parameter
+local find_t = {}
+for i = 1, 500 do find_t[i] = fwrap(i) end
+assert(consume(function() return table.find(find_t, fwrap(250)) end) == 250)
+assert(consume(function() return table.find(find_t, fwrap(999)) end) == nil)
+assert(consume(function() return table.find(find_t, fwrap(400), 100) end) == 400)
+
+-- table.find yields frequently
+local find_timing_t = {}
+for i = 1, N do find_timing_t[i] = fwrap(i) end
+assert_interrupt_bounded("table.find", 0.0001, function()
+  table.find(find_timing_t, fwrap(N + 1))
+end)
+
 return('OK')

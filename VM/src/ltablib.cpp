@@ -770,28 +770,54 @@ static int tcreate(lua_State* L)
     return 1;
 }
 
-// TODO: SeverLua: tfind uses equalobj -> luaV_equalval which invokes __eq metamethods.
-//  The entire loop is non-yieldable, so a large table of userdata with __eq
-//  could accumulate enough time to get killed by the overtime handler.
-//  Consider making yieldable with a budget-gated YIELD_CHECK (straightforward:
-//  only state is the loop index).
-static int tfind(lua_State* L)
+// ServerLua: made this yieldable due to __eq hooks
+DEFINE_YIELDABLE(tfind, 0)
 {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    luaL_checkany(L, 2);
-    int init = luaL_optinteger(L, 3, 1);
-    if (init < 1)
-        luaL_argerror(L, 3, "index out of range");
-
-    LuaTable* t = hvalue(L->base);
-
-    for (int i = init;; ++i)
+    YIELDABLE_RETURNS_DEFAULT;
+    enum class Phase : uint8_t
     {
+        DEFAULT = 0,
+        LOOP = 1,
+    };
+
+    SlotManager slots(L, is_init);
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(int32_t, i, 1);
+    slots.finalize();
+
+    if (slots.isInit())
+    {
+        luaL_checktype(L, 2, LUA_TTABLE);
+        luaL_checkany(L, 3);
+        i = luaL_optinteger(L, 4, 1);
+        if (i < 1)
+            luaL_argerror(L, 4, "index out of range");
+        lua_settop(L, 3);
+    }
+
+    // ServerLua: __eq can only fire if the search value is a table or userdata;
+    // equalobj short-circuits on ttype mismatch before reaching luaV_equalval.
+    int search_type = lua_type(L, 3);
+    // We could probably gate this on tables also having an __eq-bearing metatable,
+    // but I suppose tables could be mutated during iteration...
+    bool needs_yield = search_type == LUA_TTABLE || search_type == LUA_TUSERDATA;
+
+    LuaTable* t = hvalue(L->base + 1);
+
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH(LOOP);
+    YIELD_DISPATCH_END();
+
+    for (;; ++i)
+    {
+        if (needs_yield)
+            YIELD_CHECK(L, LOOP, LUA_INTERRUPT_STDLIB);
+
         const TValue* e = luaH_getnum(t, i);
         if (ttisnil(e))
             break;
 
-        StkId v = L->base + 1;
+        StkId v = L->base + 2;
 
         if (equalobj(L, v, e))
         {
@@ -883,7 +909,6 @@ static const luaL_Reg tab_funcs[] = {
     {"unpack", tunpack},
     {"move", tmove},
     {"create", tcreate},
-    {"find", tfind},
     {"clear", tclear},
     {"freeze", tfreeze},
     {"isfrozen", tisfrozen},
@@ -899,9 +924,11 @@ int luaopen_table(lua_State* L)
 {
     luaL_register(L, LUA_TABLIBNAME, tab_funcs);
 
-    // ServerLua: override sort registration with yieldable version (needs continuation)
+    // ServerLua: override sort and find registration with yieldable versions (need continuation)
     lua_pushcclosurek(L, tsort_v0, "sort", 0, tsort_v0_k);
     lua_setfield(L, -2, "sort");
+    lua_pushcclosurek(L, tfind_v0, "find", 0, tfind_v0_k);
+    lua_setfield(L, -2, "find");
 
     // Lua 5.1 compat
     lua_pushcfunction(L, tunpack, "unpack");
