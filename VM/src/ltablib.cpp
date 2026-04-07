@@ -237,20 +237,18 @@ static int tmove(lua_State* L)
 }
 
 // ServerLua: table.append(t, ...) - appends varargs to end of table
-// Largely a replacement for consecutive `table.insert()` calls.
+// Semantically equivalent to consecutive `table.insert()` calls.
 static int tappend(lua_State* L)
 {
-    // Need some extra slots for actually appending
     lua_checkstack(L, 2);
 
     luaL_checktype(L, 1, LUA_TTABLE);
-    int orig_len = lua_objlen(L, 1);
     int top = lua_gettop(L);
 
     for (int i = 2; i <= top; i++)
     {
         lua_pushvalue(L, i);
-        lua_rawseti(L, 1, orig_len + (i - 1));
+        lua_rawseti(L, 1, lua_objlen(L, 1) + 1);
     }
 
     return 0;

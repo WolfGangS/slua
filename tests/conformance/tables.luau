@@ -825,6 +825,20 @@ do
 
   -- returns nil
   assert(table.append({1}, 2) == nil)
+
+  -- Is semantically equivalent to repeated `table.insert()`
+  -- (i.e. it implicitly skips `nil` and respects existing holes
+  t5 = table.create(3)
+  t5[5] = 5
+  t5[1] = 1
+  t5[2] = 2
+  assert(#t5 == 2)
+  -- `nil`s are basically no-ops, as they would be in `table.insert()`
+  table.append(t5, 3, 4, nil, nil, nil, 6)
+  assert(#t5 == 6)
+
+  -- Eesh, wish there was lljson here.
+  assert(t5[3] == 3 and t5[4] == 4 and t5[5] == 5 and t5[6] == 6 and t5[7] == nil)
 end
 
 -- ServerLua: table.extend
