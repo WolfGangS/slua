@@ -18,6 +18,9 @@
 #include <cmath>
 #include <string.h>
 
+// ServerLua: used to detect __iter = pairs for native iteration fast-path
+LUAI_FUNC int luaB_pairs(lua_State* L);
+
 // Disable c99-designator to avoid the warning in computed goto dispatch table
 #ifdef __clang__
 #if __has_warning("-Wc99-designator")
@@ -2607,7 +2610,14 @@ reentry:
                 {
                     LuaTable* mt = ttistable(ra) ? hvalue(ra)->metatable : ttisuserdata(ra) ? uvalue(ra)->metatable : cast_to(LuaTable*, NULL);
 
-                    if (const TValue* fn = fasttm(L, mt, TM_ITER))
+                    const TValue* fn = fasttm(L, mt, TM_ITER);
+
+                    // ServerLua: if __iter is the builtin pairs(), skip calling it
+                    // and fall through to native iteration (handles dead keys gracefully)
+                    if (fn && ttistable(ra) && iscfunction(fn) && clvalue(fn)->c.f == luaB_pairs)
+                        fn = nullptr;
+
+                    if (fn)
                     {
                         setobj2s(L, ra + 1, ra);
                         setobj2s(L, ra, fn);
@@ -2628,11 +2638,14 @@ reentry:
                             luaG_typeerror(L, ra, "call");
                         }
                     }
+                    // ServerLua: __call iteration disabled -- use __iter instead
+                    /*
                     else if (fasttm(L, mt, TM_CALL))
                     {
                         // table or userdata with __call, will be called during FORGLOOP
                         // TODO: we might be able to stop supporting this depending on whether it's used in practice
                     }
+                    */
                     else if (ttistable(ra))
                     {
                         // set up registers for builtin iteration

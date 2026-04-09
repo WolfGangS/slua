@@ -50,6 +50,8 @@ do
   assert(x == 5)
 end
 
+-- SeverLua: We don't support __call as an iterator function anymore.
+--[[
 -- generic for with __call (tables)
 do
   local f = {}
@@ -72,6 +74,20 @@ do
     x += n
   end
   assert(x == 10)
+end
+]]--
+
+-- SeverLua: generic for _doesn't_ call __call
+do
+  local f = {1, 2, 3}
+  setmetatable(f, { __call = function(_, _, _) error("don't call this") end })
+
+  local x = 0
+  for k, v in f do
+    x += v
+    assert(k == v)
+  end
+  assert(x == 6)
 end
 
 -- generic for with pairs
@@ -129,6 +145,29 @@ do
     x += n
   end
   assert(x == 10)
+end
+
+-- ServerLua: generic for with __iter = pairs uses native iteration (removing keys is safe)
+do
+  local t = { a = 0, b = 30, c = 0, d = 10 }
+  setmetatable(t, { __iter = pairs })
+
+  local kept = {}
+  for k, v in t do
+    if v == 0 then
+      t[k] = nil
+    else
+      kept[k] = v
+    end
+  end
+
+  assert(kept.a == nil)
+  assert(kept.b == 30)
+
+  assert(t.a == nil)
+  assert(t.b == 30)
+  assert(t.c == nil)
+  assert(t.d == 10)
 end
 
 -- generic for with tables (dictionary)
