@@ -11,7 +11,7 @@ static constexpr const char* kBuiltinDefinitionBaseSrc = R"BUILTIN_SRC(
 
 @checked declare function require(target: any): any
 
-@checked declare function getfenv(target: any): { [string]: any }
+-- ServerLua REMOVED -- @checked declare function getfenv(target: any): { [string]: any }
 
 declare _G: any
 declare _VERSION: string
@@ -35,7 +35,7 @@ declare function rawget<K, V>(tab: {[K]: V}, k: K): V?
 declare function rawset<K, V>(tab: {[K]: V}, k: K, v: V): {[K]: V}
 declare function rawlen<K, V>(obj: {[K]: V} | string): number
 
-declare function setfenv<T..., R...>(target: number | (T...) -> R..., env: {[string]: any}): ((T...) -> R...)?
+-- ServerLua REMOVED -- declare function setfenv<T..., R...>(target: number | (T...) -> R..., env: {[string]: any}): ((T...) -> R...)?
 
 declare function ipairs<V>(tab: {V}): (({V}, number) -> (number?, V), {V}, number)
 
@@ -51,7 +51,7 @@ declare function select<A...>(i: string | number, ...: A...): ...any
 
 -- FIXME: This type is not entirely correct - `loadstring` returns a function or
 -- (nil, string).
-declare function loadstring<A...>(src: string, chunkname: string?): (((A...) -> any)?, string?)
+-- ServerLua REMOVED -- declare function loadstring<A...>(src: string, chunkname: string?): (((A...) -> any)?, string?)
 
 @checked declare function newproxy(mt: boolean?): any
 
@@ -78,6 +78,10 @@ declare bit32: {
     countlz: @checked (n: number) -> number,
     countrz: @checked (n: number) -> number,
     byteswap: @checked (n: number) -> number,
+
+-- ServerLua additions
+    s32: @checked (n: number) -> number,
+    smul: @checked (a: number, b: number) -> number,
 }
 
 )BUILTIN_SRC";
@@ -207,6 +211,12 @@ declare table: {
 
     clear: (table: {}) -> (),
     isfrozen: (t: {}) -> boolean,
+
+-- ServerLua additions
+    clone: (t: {[any]: any}) -> {[any]: any},
+    shrink: (t: {[any]: any}, newsize: number) -> {[any]: any},
+    append: (t: {[any]: any}, ...any) -> (),
+    extend: (t: {[any]: any}, src: {[any]: any}) -> {[any]: any},
 }
 
 )BUILTIN_SRC";
@@ -297,6 +307,85 @@ declare vector: {
 
 )BUILTIN_SRC";
 
+static constexpr const char* kBuiltinDefinitionSLuaSrc = R"BUILTIN_SRC(
+type LLJson_SL_Encode_Options = {
+  tight: boolean?,
+  replacer: (key: any, value: any, parent: any?) -> any?,
+  skip_tojson: boolean?,
+}
+
+type LLJson_SL_Decode_Options = {
+  reviver: (key: any, value: any, parent: any?, ctx: { path: any? }) -> any?,
+  track_path: boolean?,
+}
+
+declare lljson: {
+  null: any,
+  empty_array_mt: { [any]: any },
+  array_mt: { [any]: any },
+  empty_array: any,
+  _NAME: string,
+  _VERSION: string,
+  encode: @checked (value: any) -> string,
+  decode: @checked (json: string) -> any,
+  slencode: @checked (value: any, options: LLJson_SL_Encode_Options?) -> string,
+  sldecode: @checked (json: string, options: LLJson_SL_Decode_Options?) -> any,
+}
+  
+
+declare llbase64: {
+  encode: @checked (data: string | buffer) -> string,
+  decode: @checked ((data: string) -> string) & ((data: string, asBuffer: boolean?) -> string | buffer),
+}
+
+declare extern type quaternion with
+  x: number
+  y: number
+  z: number
+  s: number
+  function __add(self, other: quaternion): quaternion
+  function __sub(self, other: quaternion): quaternion
+  function __mul(self, other: quaternion): quaternion
+  function __div(self, other: quaternion): quaternion
+  function __unm(self): quaternion
+  function __eq(self, other: quaternion): boolean
+  function __tostring(self): string
+end
+
+declare extern type uuid with
+  istruthy: boolean
+  bytes: string?
+  function __tostring(self): string
+end
+
+declare function quaternion(x: number, y: number, z: number, s: number): quaternion
+
+declare quaternion: {
+  identity: quaternion,
+  create: @checked (x: number, y: number, z: number, s: number) -> quaternion,
+  normalize: @checked (q: quaternion) -> quaternion,
+  magnitude: @checked (q: quaternion) -> number,
+  dot: @checked (a: quaternion, b: quaternion) -> number,
+  slerp: @checked (a: quaternion, b: quaternion, t: number) -> quaternion,
+  conjugate: @checked (q: quaternion) -> quaternion,
+  tofwd: @checked (q: quaternion) -> vector,
+  toleft: @checked (q: quaternion) -> vector,
+  toup: @checked (q: quaternion) -> vector,
+}
+
+
+declare rotation: typeof(quaternion)
+declare uuid: {
+  create: @checked (value: string | buffer | uuid) -> uuid?,
+}
+
+declare function touuid(val: string | buffer | uuid): uuid?
+declare function tovector(val: any): vector?
+declare function toquaternion(val: any): quaternion?
+declare function torotation(val: any): quaternion?
+
+)BUILTIN_SRC";
+
 std::string getBuiltinDefinitionSource()
 {
     std::string result = kBuiltinDefinitionBaseSrc;
@@ -310,6 +399,9 @@ std::string getBuiltinDefinitionSource()
     result += kBuiltinDefinitionUtf8Src;
     result += kBuiltinDefinitionBufferSrc;
     result += kBuiltinDefinitionVectorSrc;
+
+    // ServerLua additions
+    result += kBuiltinDefinitionSLuaSrc;
 
     return result;
 }
