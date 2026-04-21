@@ -310,12 +310,12 @@ declare vector: {
 static constexpr const char* kBuiltinDefinitionSLuaSrc = R"BUILTIN_SRC(
 type LLJson_SL_Encode_Options = {
   tight: boolean?,
-  replacer: (key: any, value: any, parent: any?) -> any?,
+  replacer: ((key: any, value: any, parent: any?) -> any?)?,
   skip_tojson: boolean?,
 }
 
 type LLJson_SL_Decode_Options = {
-  reviver: (key: any, value: any, parent: any?, ctx: { path: any? }) -> any?,
+  reviver: ((key: any, value: any, parent: any?, ctx: { path: any? }) -> any?)?,
   track_path: boolean?,
 }
 
