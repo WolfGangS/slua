@@ -11,6 +11,20 @@ local to_key = touuid(expected_str)
 assert(to_key == key)
 
 local expected_key_clone = uuid(buffer.fromstring(expected_key.bytes))
+
+local expected_base64 = "EjRWeJq83vASNFZ4mrze8A"
+local base64_key_string = uuid.tobase64(expected_key)
+local key_from_base64 = uuid.frombase64(base64_key_string)
+assert(expected_base64 == base64_key_string, "expected_base64: " .. expected_base64 .. " base64_key_string: " .. base64_key_string)
+assert(key_from_base64 == expected_key, "from_key_base64: " .. tostring(key_from_base64) .. " expected_key: " .. tostring(expected_key))
+
+assert(pcall(uuid.frombase64, "foo") == false)
+assert(pcall(uuid.frombase64, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!") == false)
+assert(pcall(uuid.frombase64, expected_key.bytes) == false)
+-- Assert base64 is not reading the low 4 bits of the last byte
+assert(uuid.frombase64("AAAAAAAAAAAAAAAAAAAAAA") == uuid.frombase64("AAAAAAAAAAAAAAAAAAAAAP"))
+
+
 -- This should end up with the same UUID identity because of UUID interning.
 assert(expected_key_clone == expected_key)
 

@@ -16,6 +16,7 @@
 #include "Luau/Bytecode.h"
 #include "lllevents.h"
 #include "llltimers.h"
+#include "apr/apr_base64.h"
 
 // This module is ONLY to be loaded into LSL scripts running under Luau,
 // it is NOT for general use by Luau scripts. If you use it otherwise
@@ -189,6 +190,65 @@ static int lua_touuid(lua_State *L)
     }
     lua_pushnil(L);
     return 1;
+}
+
+// takes a UUID from the lua state and inserts a base64 encoded string version of it
+static int lua_uuid_tobase64(lua_State *L)
+{
+    auto *uuid = (lua_LSLUUID *)lua_touserdatatagged(L, 1, UTAG_UUID);
+    if (uuid == nullptr)
+        luaL_typeerror(L, 1, "uuid");
+
+    uint8_t uuid_bytes[UUID_BYTES];
+    if (uuid->compressed)
+    {
+        LUAU_ASSERT(uuid->str->len == UUID_BYTES);
+        memcpy(uuid_bytes, getstr(uuid->str), UUID_BYTES);
+    }
+    else
+    {
+        const char *str = getstr(uuid->str);
+        size_t len = uuid->str->len;
+        if (!parse_uuid_str(str, len, (char *)uuid_bytes, false))
+            luaL_argerrorL(L, 1, "invalid UUID format");
+    }
+    // 16 bytes encodes to 24 characters but only the first 22 are data
+    // the rest is padding we can strip to match how lljson handles it
+    char encoded[25];
+    apr_base64_encode_binary(encoded, uuid_bytes, UUID_BYTES);
+    lua_pushlstring(L, encoded, 22);
+    return 1;
+}
+
+// takes a string from the lua state interprets it as base64 to convert
+// to a uuid and insert that into the state
+static int lua_uuid_frombase64(lua_State *L)
+{
+    size_t len;
+    const char *str = luaL_checklstring(L, 1, &len);
+    // Accept either the unpadded 22 chars or a padded 24 with == at end
+    char padded[25];
+    if (len == 22)
+    {
+        memcpy(padded, str, 22);
+        padded[22] = '=';
+        padded[23] = '=';
+        padded[24] = '\0';
+    }
+    else if (len == 24 && str[22] == '=' && str[23] == '=')
+    {
+        memcpy(padded, str, 24);
+        padded[24] = '\0';
+    }
+    else
+    {
+        luaL_argerrorL(L, 1, "invalid base64 UUID string");
+    }
+    uint8_t uuid_bytes[UUID_BYTES];
+    int decoded_len = apr_base64_decode_binary(uuid_bytes, padded);
+    if (decoded_len != UUID_BYTES)
+        luaL_argerrorL(L, 1, "malformed base64 UUID");
+    return luaSL_pushuuidbytes(L, uuid_bytes);
 }
 
 static std::string _float_to_str(float v, bool high_precision, bool neg_zero = true)
@@ -1691,6 +1751,8 @@ static int uuid_call(lua_State *L)
 
 static const luaL_Reg uuidlib[] = {
     {"create", lua_uuid_ctor},
+    {"tobase64", lua_uuid_tobase64},
+    {"frombase64", lua_uuid_frombase64},
     {NULL, NULL},
 };
 
