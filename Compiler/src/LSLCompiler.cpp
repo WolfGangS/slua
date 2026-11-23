@@ -10,6 +10,8 @@
 #include <tailslide/logger.hh>
 #include <tailslide/passes/constant_expression_simplifier.hh>
 #include <algorithm>
+#include <set>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -571,15 +573,18 @@ void LuauVisitor::buildFunction(LSLASTNode *func_like)
 
     // Pre-allocate constants that need small indices (detected by LuauResourceVisitor)
     // Do this first to ensure they get low constant indices
-    for (auto one_type : sym_data.needed_one_types)
+    // Fixed order, the set's iteration order must not leak into constant indices
+    for (auto *one_type : {TYPE(LST_INTEGER), TYPE(LST_FLOATINGPOINT)})
     {
-        addConstantUnder(one_type->getOneValue(), UINT8_MAX);
+        if (sym_data.needed_one_types.count(one_type))
+            addConstantUnder(one_type->getOneValue(), UINT8_MAX);
     }
 
-    // Pre-allocate import strings to ensure they're under index 1024
-    for (const auto& import_str : sym_data.needed_import_strings)
+    // Pre-allocate import strings (in sort order) to ensure they're under index 1024
+    const auto &imports = sym_data.needed_import_strings;
+    for (auto import_str : std::set<std::string_view>(imports.begin(), imports.end()))
     {
-        addConstantString(sref(import_str), kMaxStringImportRef);
+        addConstantString({import_str.data(), import_str.size()}, kMaxStringImportRef);
     }
 
     // If the function has irreducible control flow, we need to make sure that
